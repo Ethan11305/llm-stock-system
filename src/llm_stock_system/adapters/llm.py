@@ -1,8 +1,20 @@
 import re
 
 from llm_stock_system.core.enums import SourceTier, StanceBias, Topic
+from llm_stock_system.core.fundamental_valuation import (
+    build_fundamental_valuation_facts,
+    build_fundamental_valuation_highlights,
+    build_fundamental_valuation_summary,
+    is_fundamental_valuation_question,
+)
 from llm_stock_system.core.interfaces import LLMClient
 from llm_stock_system.core.models import AnswerDraft, GovernanceReport, SourceCitation, StructuredQuery
+from llm_stock_system.core.target_price import (
+    build_forward_price_fact,
+    build_forward_price_highlight,
+    build_forward_price_summary,
+    is_forward_price_question,
+)
 
 
 class RuleBasedSynthesisClient(LLMClient):
@@ -49,6 +61,12 @@ class RuleBasedSynthesisClient(LLMClient):
             f"{item.source_name} \u65bc {item.published_at:%Y-%m-%d} \u63d0\u4f9b\u8cc7\u6599\uff1a{item.excerpt}"
             for item in governance_report.evidence[:3]
         ]
+        if is_fundamental_valuation_question(query):
+            highlights = build_fundamental_valuation_highlights(query, governance_report)
+            facts = build_fundamental_valuation_facts(query, governance_report)
+        if query.question_type == "price_outlook" and is_forward_price_question(query):
+            highlights = [build_forward_price_highlight(query, governance_report), *highlights][:3]
+            facts = [build_forward_price_fact(query, governance_report), *facts][:3]
 
         return AnswerDraft(
             summary=self._build_summary(query, governance_report),
@@ -342,11 +360,11 @@ class RuleBasedSynthesisClient(LLMClient):
                 return f"{label} 目前本益比約 {current_pe} 倍，約落在近 13 個月歷史分位 {percentile}% 左右，但仍需搭配獲利成長與產業狀況一起判斷是否偏貴。"
             return f"\u8cc7\u6599\u4e0d\u8db3\uff0c\u7121\u6cd5\u78ba\u8a8d{label}\u76ee\u524d\u672c\u76ca\u6bd4\u5728\u6b77\u53f2\u5340\u9593\u6240\u8655\u7684\u4f4d\u7f6e\u8207\u662f\u5426\u504f\u8cb4\u3002"
 
+        if is_fundamental_valuation_question(query):
+            return build_fundamental_valuation_summary(query, governance_report)
+
         if query.question_type == "price_outlook":
-            return (
-                f"{label} \u7684\u77ed\u671f\u6f32\u8dcc\u7121\u6cd5\u50c5\u9760\u76ee\u524d\u516c\u958b\u8cc7\u8a0a\u76f4\u63a5\u9810\u6e2c\uff0c"
-                "\u4ecd\u9700\u7d50\u5408\u5f8c\u7e8c\u516c\u544a\u3001\u8ca1\u5831\u3001\u65b0\u805e\u8207\u50f9\u683c\u884c\u70ba\u6301\u7e8c\u89c0\u5bdf\u3002"
-            )
+            return build_forward_price_summary(query, governance_report)
 
         if query.question_type == "revenue_growth_review":
             share_value = self._extract_number(governance_report, r"(\d+(?:\.\d+)?)%")
@@ -731,6 +749,12 @@ class RuleBasedSynthesisClient(LLMClient):
                 "\u82e5\u516c\u544a\u6d89\u53ca\u80a1\u5229\u3001\u8463\u4e8b\u6703\u6216\u6cd5\u8aaa\uff0c\u53ef\u80fd\u63d0\u9ad8\u5f8c\u7e8c\u95dc\u6ce8\u5ea6\u3002",
                 "\u516c\u544a\u672c\u8eab\u4ecd\u9700\u642d\u914d\u8ca1\u5831\u8207\u65b0\u805e\u4ea4\u53c9\u9a57\u8b49\uff0c\u907f\u514d\u904e\u5ea6\u89e3\u8b80\u3002",
             ]
+        if is_fundamental_valuation_question(query):
+            return [
+                "\u57fa\u672c\u9762\u53ef\u4ee5\u5e6b\u52a9\u5224\u65b7\u7372\u5229\u8207\u71df\u904b\u52d5\u80fd\u662f\u5426\u5177\u5099\u5ef6\u7e8c\u6027\u3002",
+                "\u672c\u76ca\u6bd4\u5247\u53ef\u4ee5\u62ff\u4f86\u5b9a\u4f4d\u5e02\u5834\u76ee\u524d\u7d66\u9019\u6a94\u516c\u53f8\u7684\u4f30\u503c\u6c34\u4f4d\u3002",
+                "\u82e5\u8981\u505a\u9032\u5834\u5224\u65b7\uff0c\u6700\u597d\u662f\u628a\u7372\u5229\u8da8\u52e2\u548c\u4f30\u503c\u4f4d\u7f6e\u4e00\u8d77\u770b\u3002",
+            ]
         if query.question_type == "price_outlook":
             return [
                 "\u77ed\u671f\u6f32\u8dcc\u901a\u5e38\u540c\u6642\u53d7\u5230\u57fa\u672c\u9762\u3001\u8cc7\u91d1\u9762\u8207\u6d88\u606f\u9762\u5f71\u97ff\u3002",
@@ -875,6 +899,12 @@ class RuleBasedSynthesisClient(LLMClient):
                 "\u516c\u544a\u6a19\u984c\u5bb9\u6613\u88ab\u5feb\u901f\u89e3\u8b80\uff0c\u4ecd\u9700\u56de\u770b\u5b8c\u6574\u63ed\u9732\u5167\u5bb9\u3002",
                 "\u82e5\u53ea\u6709\u55ae\u4e00\u516c\u544a\u800c\u7f3a\u4e4f\u4ea4\u53c9\u4f86\u6e90\uff0c\u5e02\u5834\u89e3\u8b80\u53ef\u80fd\u504f\u5dee\u3002",
                 "\u516c\u544a\u5c0d\u80a1\u50f9\u7684\u5f71\u97ff\u5e38\u53d7\u6642\u9593\u9ede\u8207\u5e02\u5834\u60c5\u7dd2\u653e\u5927\u6216\u920d\u5316\u3002",
+            ]
+        elif is_fundamental_valuation_question(query):
+            risks = [
+                "\u4f30\u503c\u9ad8\u4f4e\u6703\u96a8\u80a1\u50f9\u8207\u7372\u5229\u9810\u671f\u8b8a\u5316\uff0c\u4eca\u5929\u7684\u672c\u76ca\u6bd4\u4f4d\u7f6e\u4e0d\u4ee3\u8868\u5f8c\u7e8c\u4e0d\u6703\u518d\u8abf\u6574\u3002",
+                "\u57fa\u672c\u9762\u5982\u679c\u53ea\u6709\u55ae\u4e00\u5b63\u6216\u55ae\u6708\u8b49\u64da\uff0c\u4e0d\u4e00\u5b9a\u80fd\u4ee3\u8868\u4e2d\u9577\u671f\u7372\u5229\u8da8\u52e2\u3002",
+                "\u55ae\u770b\u672c\u76ca\u6bd4\u6216\u55ae\u770b\u71df\u6536\u90fd\u53ef\u80fd\u5931\u771f\uff0c\u4ecd\u8981\u642d\u914d\u73fe\u91d1\u6d41\u3001\u8cc7\u672c\u652f\u51fa\u548c\u7522\u696d\u666f\u6c23\u4e00\u8d77\u89e3\u8b80\u3002",
             ]
         elif query.question_type == "price_outlook":
             risks = [

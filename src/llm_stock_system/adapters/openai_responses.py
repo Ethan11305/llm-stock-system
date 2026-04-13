@@ -3,12 +3,24 @@ import json
 import httpx
 
 from llm_stock_system.adapters.llm import RuleBasedSynthesisClient
+from llm_stock_system.core.fundamental_valuation import (
+    build_fundamental_valuation_facts,
+    build_fundamental_valuation_highlights,
+    build_fundamental_valuation_summary,
+    is_fundamental_valuation_question,
+)
 from llm_stock_system.core.interfaces import LLMClient
 from llm_stock_system.core.models import (
     AnswerDraft,
     GovernanceReport,
     SourceCitation,
     StructuredQuery,
+)
+from llm_stock_system.core.target_price import (
+    build_forward_price_fact,
+    build_forward_price_highlight,
+    build_forward_price_summary,
+    is_forward_price_question,
 )
 
 
@@ -91,6 +103,8 @@ class OpenAIResponsesSynthesisClient(LLMClient):
             response_json = self._request(self._build_payload(system_prompt, user_prompt))
             text_output = self._extract_text(response_json)
             parsed = self._parse_json_block(text_output)
+            parsed = self._apply_target_price_guardrails(query, governance_report, parsed)
+            parsed = self._apply_fundamental_valuation_guardrails(query, governance_report, parsed)
         except (httpx.HTTPError, ValueError, json.JSONDecodeError):
             return self._fallback_client.synthesize(query, governance_report, system_prompt)
 
@@ -249,6 +263,43 @@ class OpenAIResponsesSynthesisClient(LLMClient):
         if start != -1 and end != -1 and start < end:
             return json.loads(stripped[start : end + 1])
         raise ValueError("OpenAI response did not contain a JSON object")
+
+    def _apply_target_price_guardrails(
+        self,
+        query: StructuredQuery,
+        governance_report: GovernanceReport,
+        parsed: dict,
+    ) -> dict:
+        if query.question_type != "price_outlook" or not is_forward_price_question(query):
+            return parsed
+
+        guarded = dict(parsed)
+        guarded["summary"] = build_forward_price_summary(query, governance_report)
+
+        highlights = self._coerce_list(parsed.get("highlights"))
+        facts = self._coerce_list(parsed.get("facts"))
+
+        target_highlight = build_forward_price_highlight(query, governance_report)
+        target_fact = build_forward_price_fact(query, governance_report)
+
+        guarded["highlights"] = [target_highlight, *highlights][:3]
+        guarded["facts"] = [target_fact, *facts][:3]
+        return guarded
+
+    def _apply_fundamental_valuation_guardrails(
+        self,
+        query: StructuredQuery,
+        governance_report: GovernanceReport,
+        parsed: dict,
+    ) -> dict:
+        if not is_fundamental_valuation_question(query):
+            return parsed
+
+        guarded = dict(parsed)
+        guarded["summary"] = build_fundamental_valuation_summary(query, governance_report)
+        guarded["highlights"] = build_fundamental_valuation_highlights(query, governance_report)
+        guarded["facts"] = build_fundamental_valuation_facts(query, governance_report)
+        return guarded
 
     def _coerce_list(self, value) -> list[str]:
         if isinstance(value, list):

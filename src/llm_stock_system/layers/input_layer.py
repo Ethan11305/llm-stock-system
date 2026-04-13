@@ -96,6 +96,31 @@ class InputLayer:
 
     PRICE_RANGE_KEYWORDS = ("\u6700\u9ad8\u9ede", "\u6700\u4f4e\u9ede", "\u6700\u9ad8\u50f9", "\u6700\u4f4e\u50f9", "\u5340\u9593", "range")
     PRICE_OUTLOOK_KEYWORDS = ("\u6f32\u8dcc\u9810\u6e2c", "\u6703\u6f32\u55ce", "\u6703\u8dcc\u55ce", "\u8d70\u52e2", "\u9810\u6e2c", "\u76ee\u6a19\u50f9")
+    FUNDAMENTAL_OVERVIEW_KEYWORDS = (
+        "\u57fa\u672c\u9762",
+        "\u9ad4\u8cea",
+        "\u71df\u904b",
+        "\u8ca1\u5831",
+        "\u7372\u5229",
+        "\u71df\u6536",
+        "eps",
+        "\u6210\u9577",
+        "\u6bdb\u5229",
+        "\u73fe\u91d1\u6d41",
+    )
+    PRICE_LEVEL_ACTION_KEYWORDS = ("\u7a81\u7834", "\u7ad9\u4e0a", "\u8dcc\u7834", "\u5931\u5b88", "\u5b88\u4f4f", "\u7ad9\u7a69", "\u4e0a\u770b", "\u6311\u6230")
+    PRICE_LEVEL_FUTURE_HINTS = (
+        "\u672a\u4f86",
+        "\u4e0b\u534a\u5e74",
+        "\u4e0a\u534a\u5e74",
+        "\u534a\u5e74",
+        "\u6709\u6a5f\u6703",
+        "\u53ef\u80fd",
+        "\u80fd\u5426",
+        "\u6703\u4e0d\u6703",
+        "\u662f\u5426",
+        "\u53ef\u4e0d\u53ef\u80fd",
+    )
     EPS_KEYWORDS = ("eps", "\u6bcf\u80a1\u76c8\u9918", "\u8ca1\u5831", "\u7372\u5229", "\u6cd5\u8aaa")
     MONTHLY_REVENUE_KEYWORDS = (
         "\u6708\u71df\u6536",
@@ -526,6 +551,10 @@ class InputLayer:
 
         if question_type == "monthly_revenue_yoy_review":
             return mapping["1y"]
+        if question_type == "fundamental_pe_review":
+            return mapping["1y"]
+        if question_type == "price_outlook":
+            return mapping["30d"]
         if question_type == "guidance_reaction_review":
             return mapping["30d"]
         if question_type == "shipping_rate_impact_review":
@@ -612,6 +641,10 @@ class InputLayer:
             keyword in lowered or keyword in query or keyword.lower().replace(" ", "") in compacted
             for keyword in self.PE_VALUATION_KEYWORDS
         )
+        has_fundamental_overview = any(
+            keyword in lowered or keyword in query or keyword.lower().replace(" ", "") in compacted
+            for keyword in self.FUNDAMENTAL_OVERVIEW_KEYWORDS
+        )
         has_fcf = any(
             keyword in lowered or keyword in query or keyword.lower().replace(" ", "") in compacted
             for keyword in self.FCF_KEYWORDS
@@ -679,6 +712,15 @@ class InputLayer:
         has_ex_dividend = any(
             keyword in query or keyword.lower().replace(" ", "") in compacted
             for keyword in self.EX_DIVIDEND_KEYWORDS
+        )
+        has_price_level_query = bool(
+            re.search(
+                r"(\u7a81\u7834|\u7ad9\u4e0a|\u8dcc\u7834|\u5931\u5b88|\u5b88\u4f4f|\u7ad9\u7a69|\u4e0a\u770b|\u6311\u6230)\s*\d[\d,]*(?:\.\d+)?",
+                query,
+            )
+        ) and any(
+            token in query or token.lower().replace(" ", "") in compacted or "\u55ce" in query
+            for token in self.PRICE_LEVEL_FUTURE_HINTS
         )
 
         if any(keyword in query or keyword.lower().replace(" ", "") in compacted for keyword in self.PRICE_RANGE_KEYWORDS):
@@ -810,6 +852,14 @@ class InputLayer:
             )
         ):
             return "monthly_revenue_yoy_review"
+        if has_pe_valuation and (
+            has_fundamental_overview
+            or any(
+                token in query or token.lower().replace(" ", "") in compacted
+                for token in ("\u540c\u6642", "\u4e00\u8d77", "\u7d9c\u5408", "\u4e00\u8d77\u770b", "\u503c\u4e0d\u503c\u5f97", "\u6295\u8cc7")
+            )
+        ):
+            return "fundamental_pe_review"
         if has_pe_valuation:
             return "pe_valuation_review"
         if has_debt_ratio and (has_cash_balance or has_dividend):
@@ -826,6 +876,8 @@ class InputLayer:
             for token in ("\u8655\u5206", "\u571f\u5730", "\u8cc7\u7522", "\u696d\u5916", "\u5165\u5e33", "\u8a8d\u5217", "eps")
         ):
             return "announcement_summary"
+        if has_price_level_query:
+            return "price_outlook"
         if any(keyword in query or keyword.lower().replace(" ", "") in compacted for keyword in self.PRICE_OUTLOOK_KEYWORDS):
             return "price_outlook"
         if has_theme_impact and any(

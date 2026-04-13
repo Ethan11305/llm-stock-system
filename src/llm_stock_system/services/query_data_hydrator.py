@@ -18,6 +18,8 @@ class QueryDataHydrator:
     FUNDAMENTAL_QUESTION_TYPES = {
         "earnings_summary",
         "eps_dividend_review",
+        "fundamental_pe_review",
+        "investment_support",
         "margin_turnaround_review",
         "gross_margin_comparison_review",
         "profitability_stability_review",
@@ -35,6 +37,8 @@ class QueryDataHydrator:
         "monthly_revenue_yoy_review",
         "listing_revenue_review",
         "guidance_reaction_review",
+        "fundamental_pe_review",
+        "investment_support",
     }
 
     def __init__(
@@ -92,8 +96,11 @@ class QueryDataHydrator:
         if query.question_type == "listing_revenue_review":
             self._safe_call(self._gateway.sync_monthly_revenue_points, ticker)
 
-        if query.question_type == "pe_valuation_review":
+        if query.question_type in {"pe_valuation_review", "fundamental_pe_review", "investment_support"}:
             self._safe_call(self._gateway.sync_pe_valuation_points, ticker)
+
+        if query.question_type in {"fundamental_pe_review", "investment_support"}:
+            self._safe_call(self._gateway.sync_monthly_revenue_points, ticker)
 
         if query.question_type in self.FUNDAMENTAL_QUESTION_TYPES:
             self._safe_call(self._gateway.sync_financial_statements, ticker, fundamentals_start, today)

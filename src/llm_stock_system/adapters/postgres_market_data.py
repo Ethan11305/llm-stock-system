@@ -699,6 +699,12 @@ class FinMindPostgresGateway:
             return self._build_fcf_dividend_sustainability_documents(query)
         if query.question_type == "pe_valuation_review":
             return self._build_pe_valuation_documents(query)
+        if query.question_type in {"fundamental_pe_review", "investment_support"}:
+            return self._sorted(
+                self._build_fundamental_documents(query)
+                + self._build_pe_valuation_documents(query)
+                + self._build_market_documents(query)
+            )
         if query.question_type == "technical_indicator_review":
             return self._build_technical_indicator_documents(query)
         if query.question_type == "revenue_growth_review":

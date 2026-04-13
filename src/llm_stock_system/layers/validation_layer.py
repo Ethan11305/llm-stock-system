@@ -1,5 +1,14 @@
 from llm_stock_system.core.enums import ConfidenceLight, ConsistencyStatus, FreshnessStatus, StanceBias
+from llm_stock_system.core.fundamental_valuation import has_fundamental_evidence, has_valuation_evidence
 from llm_stock_system.core.models import AnswerDraft, GovernanceReport, StructuredQuery, ValidationResult
+from llm_stock_system.core.target_price import (
+    extract_target_price_values,
+    has_forward_price_context,
+    has_price_level_context,
+    has_target_price_context,
+    is_forward_price_question,
+    is_target_price_question,
+)
 
 
 class ValidationLayer:
@@ -38,6 +47,31 @@ class ValidationLayer:
         if any(token in answer_draft.summary for token in ("\u8cc7\u6599\u4e0d\u8db3", "\u7121\u6cd5\u78ba\u8a8d")):
             warnings.append("Answer indicates insufficient data.")
             confidence_score = min(confidence_score, 0.25)
+        if query.question_type == "price_outlook" and is_forward_price_question(query):
+            has_direct_numeric_evidence = False
+            has_directional_context = False
+
+            if is_target_price_question(query):
+                has_direct_numeric_evidence = bool(extract_target_price_values(governance_report))
+                has_directional_context = has_target_price_context(governance_report)
+            else:
+                has_direct_numeric_evidence = has_price_level_context(query, governance_report)
+                has_directional_context = bool(extract_target_price_values(governance_report)) or has_forward_price_context(
+                    query,
+                    governance_report,
+                )
+
+            if has_direct_numeric_evidence:
+                warnings.append("Forward price answers remain scenario-dependent even when a numeric level is mentioned.")
+                confidence_score = min(confidence_score, 0.55)
+            elif has_directional_context:
+                warnings.append(
+                    "Forward price query is supported only by directional analyst or technical context without direct numeric evidence."
+                )
+                confidence_score = min(confidence_score, 0.55)
+            else:
+                warnings.append("Forward price query lacks direct target-price, threshold, or analyst evidence.")
+                confidence_score = min(confidence_score, 0.25)
         if query.question_type == "ex_dividend_performance":
             source_names = {item.source_name.lower() for item in governance_report.evidence}
             has_dividend_evidence = any("dividend" in source_name for source_name in source_names)
@@ -160,6 +194,15 @@ class ValidationLayer:
             if not any("twse" in source_name for source_name in source_names):
                 warnings.append("PE valuation review requires official valuation evidence.")
                 confidence_score = min(confidence_score, 0.25)
+        if query.question_type in {"fundamental_pe_review", "investment_support"}:
+            if not has_fundamental_evidence(governance_report):
+                warnings.append("Combined fundamental and valuation review is missing direct fundamental evidence.")
+                confidence_score = min(confidence_score, 0.25)
+            if not has_valuation_evidence(governance_report):
+                warnings.append("Combined fundamental and valuation review is missing direct valuation evidence.")
+                confidence_score = min(confidence_score, 0.25)
+            if has_fundamental_evidence(governance_report) and has_valuation_evidence(governance_report):
+                confidence_score = min(confidence_score, 0.75)
 
         if confidence_score >= self._min_green_confidence:
             light = ConfidenceLight.GREEN

@@ -70,7 +70,7 @@ class InMemoryDocumentRepository(DocumentRepository):
             score += 2
         if query.question_type == "theme_impact_review" and document.ticker in {query.ticker, query.comparison_ticker}:
             score += 2
-        if query.question_type in {"investment_support", "price_outlook", "price_range"}:
+        if query.question_type in {"investment_support", "fundamental_pe_review", "price_outlook", "price_range"}:
             score += 1
         return score
 
