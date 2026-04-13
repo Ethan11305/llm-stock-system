@@ -703,7 +703,8 @@ class FinMindPostgresGateway:
             return self._sorted(
                 self._build_fundamental_documents(query)
                 + self._build_pe_valuation_documents(query)
-                + self._build_market_documents(query)
+                + self._build_market_documents(query),
+                question_type=query.question_type,
             )
         if query.question_type == "technical_indicator_review":
             return self._build_technical_indicator_documents(query)
@@ -714,7 +715,10 @@ class FinMindPostgresGateway:
         if query.question_type == "season_line_margin_review":
             return self._build_season_line_margin_documents(query)
         if query.question_type == "price_outlook":
-            return self._sorted(self._build_price_documents(query) + self._build_market_documents(query))
+            return self._sorted(
+                self._build_price_documents(query) + self._build_market_documents(query),
+                question_type=query.question_type,
+            )
         if query.question_type == "dividend_yield_review":
             return self._build_dividend_yield_documents(query)
         if query.question_type == "ex_dividend_performance":
@@ -3449,9 +3453,52 @@ class FinMindPostgresGateway:
             return value.replace(tzinfo=timezone.utc)
         return value.astimezone(timezone.utc)
 
-    def _sorted(self, documents: list[Document]) -> list[Document]:
-        documents.sort(key=lambda item: (item.published_at, self._tier_rank(item.source_tier)), reverse=True)
-        return documents
+    def _sorted(
+        self,
+        documents: list[Document],
+        question_type: str | None = None,
+    ) -> list[Document]:
+        deduped: dict[tuple[str, str], Document] = {}
+        for document in documents:
+            dedupe_key = (document.url, document.source_type)
+            existing = deduped.get(dedupe_key)
+            if existing is None or self._sort_key(document, question_type) > self._sort_key(
+                existing,
+                question_type,
+            ):
+                deduped[dedupe_key] = document
+
+        ordered = list(deduped.values())
+        ordered.sort(key=lambda item: self._sort_key(item, question_type), reverse=True)
+        return ordered
+
+    def _sort_key(self, document: Document, question_type: str | None) -> tuple[int, int, datetime]:
+        return (
+            self._document_priority(document, question_type),
+            self._tier_rank(document.source_tier),
+            document.published_at,
+        )
+
+    def _document_priority(self, document: Document, question_type: str | None) -> int:
+        if question_type in {"fundamental_pe_review", "investment_support"}:
+            if document.source_type in {"pe_current", "pe_history", "pe_assessment"}:
+                return 4
+            if document.source_type in {
+                "financial_statement",
+                "financial_statement_breakdown",
+                "financial_statement_latest",
+            }:
+                return 3
+            if document.source_type in {"dividend_policy", "dividend_analysis"}:
+                return 2
+            if document.source_type == "news_article":
+                return 1
+        if question_type == "price_outlook":
+            if document.source_type in {"market_data", "technical_indicator"}:
+                return 3
+            if document.source_type == "news_article":
+                return 1
+        return 0
 
     def _tier_rank(self, tier: SourceTier) -> int:
         return {SourceTier.HIGH: 3, SourceTier.MEDIUM: 2, SourceTier.LOW: 1}[tier]
