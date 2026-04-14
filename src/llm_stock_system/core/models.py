@@ -1,17 +1,115 @@
+from collections.abc import Mapping
 from datetime import datetime
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .enums import (
     ConfidenceLight,
     ConsistencyStatus,
+    DataFacet,
     FreshnessStatus,
+    Intent,
     SourceTier,
     StanceBias,
     SufficiencyStatus,
     Topic,
 )
+
+
+QUESTION_TYPE_TO_INTENT: dict[str, Intent] = {
+    "market_summary": Intent.NEWS_DIGEST,
+    "theme_impact_review": Intent.NEWS_DIGEST,
+    "shipping_rate_impact_review": Intent.NEWS_DIGEST,
+    "electricity_cost_impact_review": Intent.NEWS_DIGEST,
+    "macro_yield_sentiment_review": Intent.NEWS_DIGEST,
+    "guidance_reaction_review": Intent.NEWS_DIGEST,
+    "listing_revenue_review": Intent.NEWS_DIGEST,
+    "earnings_summary": Intent.EARNINGS_REVIEW,
+    "eps_dividend_review": Intent.EARNINGS_REVIEW,
+    "monthly_revenue_yoy_review": Intent.EARNINGS_REVIEW,
+    "margin_turnaround_review": Intent.EARNINGS_REVIEW,
+    "pe_valuation_review": Intent.VALUATION_CHECK,
+    "fundamental_pe_review": Intent.VALUATION_CHECK,
+    "price_range": Intent.VALUATION_CHECK,
+    "price_outlook": Intent.VALUATION_CHECK,
+    "dividend_yield_review": Intent.DIVIDEND_ANALYSIS,
+    "ex_dividend_performance": Intent.DIVIDEND_ANALYSIS,
+    "fcf_dividend_sustainability_review": Intent.DIVIDEND_ANALYSIS,
+    "debt_dividend_safety_review": Intent.DIVIDEND_ANALYSIS,
+    "profitability_stability_review": Intent.FINANCIAL_HEALTH,
+    "gross_margin_comparison_review": Intent.FINANCIAL_HEALTH,
+    "revenue_growth_review": Intent.FINANCIAL_HEALTH,
+    "technical_indicator_review": Intent.TECHNICAL_VIEW,
+    "season_line_margin_review": Intent.TECHNICAL_VIEW,
+    "investment_support": Intent.INVESTMENT_ASSESSMENT,
+    "risk_review": Intent.INVESTMENT_ASSESSMENT,
+    "announcement_summary": Intent.INVESTMENT_ASSESSMENT,
+}
+
+INTENT_FACETS: dict[Intent, frozenset[DataFacet]] = {
+    Intent.NEWS_DIGEST: frozenset({DataFacet.NEWS, DataFacet.PRICE_HISTORY}),
+    Intent.EARNINGS_REVIEW: frozenset(
+        {
+            DataFacet.FINANCIAL_STATEMENTS,
+            DataFacet.MONTHLY_REVENUE,
+            DataFacet.NEWS,
+        }
+    ),
+    Intent.VALUATION_CHECK: frozenset(
+        {
+            DataFacet.PE_VALUATION,
+            DataFacet.PRICE_HISTORY,
+            DataFacet.FINANCIAL_STATEMENTS,
+            DataFacet.NEWS,
+        }
+    ),
+    Intent.DIVIDEND_ANALYSIS: frozenset(
+        {
+            DataFacet.DIVIDEND,
+            DataFacet.CASH_FLOW,
+            DataFacet.BALANCE_SHEET,
+            DataFacet.FINANCIAL_STATEMENTS,
+        }
+    ),
+    Intent.FINANCIAL_HEALTH: frozenset(
+        {
+            DataFacet.FINANCIAL_STATEMENTS,
+            DataFacet.MONTHLY_REVENUE,
+            DataFacet.NEWS,
+        }
+    ),
+    Intent.TECHNICAL_VIEW: frozenset({DataFacet.PRICE_HISTORY, DataFacet.MARGIN_DATA}),
+    Intent.INVESTMENT_ASSESSMENT: frozenset(
+        {
+            DataFacet.FINANCIAL_STATEMENTS,
+            DataFacet.PE_VALUATION,
+            DataFacet.DIVIDEND,
+            DataFacet.NEWS,
+            DataFacet.PRICE_HISTORY,
+        }
+    ),
+}
+
+
+def infer_intent_from_question_type(question_type: str | None) -> Intent:
+    if question_type is None:
+        return Intent.NEWS_DIGEST
+    return QUESTION_TYPE_TO_INTENT.get(question_type, Intent.NEWS_DIGEST)
+
+
+def infer_data_facets(
+    intent: Intent | str | None,
+    extra_facets: set[DataFacet | str] | list[DataFacet | str] | None = None,
+) -> set[DataFacet | str]:
+    facets = set(extra_facets or [])
+    if intent is None:
+        return facets
+    try:
+        resolved_intent = intent if isinstance(intent, Intent) else Intent(intent)
+    except ValueError:
+        return facets
+    return set(INTENT_FACETS.get(resolved_intent, frozenset())) | facets
 
 
 class QueryRequest(BaseModel):
@@ -32,8 +130,27 @@ class StructuredQuery(BaseModel):
     topic: Topic = Topic.COMPOSITE
     time_range_label: str = "7d"
     time_range_days: int = 7
+    intent: Intent = Intent.NEWS_DIGEST
+    data_facets: set[DataFacet] = Field(default_factory=set)
+    topic_tags: list[str] = Field(default_factory=list)
     question_type: str = "market_summary"
     stance_bias: StanceBias = StanceBias.NEUTRAL
+
+    @model_validator(mode="before")
+    @classmethod
+    def _populate_intent_metadata(cls, data: object) -> object:
+        if not isinstance(data, Mapping):
+            return data
+
+        values = dict(data)
+        question_type = values.get("question_type")
+        if values.get("intent") in (None, ""):
+            values["intent"] = infer_intent_from_question_type(question_type)
+        values["data_facets"] = infer_data_facets(
+            values.get("intent"),
+            values.get("data_facets"),
+        )
+        return values
 
 
 class Document(BaseModel):

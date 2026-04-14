@@ -2,7 +2,7 @@ import re
 
 from llm_stock_system.core.enums import StanceBias, Topic
 from llm_stock_system.core.interfaces import StockResolver
-from llm_stock_system.core.models import QueryRequest, StructuredQuery
+from llm_stock_system.core.models import QueryRequest, StructuredQuery, infer_intent_from_question_type, infer_intent_from_question_type
 
 
 class InputLayer:
@@ -331,6 +331,86 @@ class InputLayer:
         "\u89c0\u9ede",
         "\u6700\u65b0\u89c0\u9ede",
     )
+    QUESTION_TYPE_FALLBACK_TOPIC_TAGS = {
+        "theme_impact_review": ("\u984c\u6750", "\u7522\u696d"),
+        "shipping_rate_impact_review": ("\u822a\u904b", "SCFI"),
+        "electricity_cost_impact_review": ("\u96fb\u50f9", "\u6210\u672c"),
+        "macro_yield_sentiment_review": ("CPI", "\u6b96\u5229\u7387"),
+        "guidance_reaction_review": ("\u6cd5\u8aaa", "\u6307\u5f15"),
+        "listing_revenue_review": ("\u4e0a\u5e02", "\u71df\u6536"),
+        "monthly_revenue_yoy_review": ("\u6708\u71df\u6536",),
+        "margin_turnaround_review": ("\u6bdb\u5229\u7387", "\u8f49\u6b63"),
+        "gross_margin_comparison_review": ("\u6bdb\u5229\u7387", "\u6bd4\u8f03"),
+        "pe_valuation_review": ("\u672c\u76ca\u6bd4",),
+        "fundamental_pe_review": ("\u57fa\u672c\u9762", "\u672c\u76ca\u6bd4"),
+        "price_range": ("\u80a1\u50f9\u5340\u9593",),
+        "price_outlook": ("\u80a1\u50f9", "\u5c55\u671b"),
+        "dividend_yield_review": ("\u80a1\u5229", "\u6b96\u5229\u7387"),
+        "ex_dividend_performance": ("\u9664\u606f", "\u586b\u606f"),
+        "fcf_dividend_sustainability_review": ("\u80a1\u5229", "\u73fe\u91d1\u6d41"),
+        "debt_dividend_safety_review": ("\u80a1\u5229", "\u8ca0\u50b5"),
+        "profitability_stability_review": ("\u7372\u5229", "\u7a69\u5b9a\u6027"),
+        "revenue_growth_review": ("\u71df\u6536", "\u6210\u9577"),
+        "technical_indicator_review": ("\u6280\u8853\u9762",),
+        "season_line_margin_review": ("\u5b63\u7dda", "\u7c4c\u78bc"),
+        "earnings_summary": ("\u8ca1\u5831",),
+        "eps_dividend_review": ("EPS", "\u80a1\u5229"),
+        "investment_support": ("\u6295\u8cc7\u8a55\u4f30",),
+        "risk_review": ("\u98a8\u96aa",),
+        "announcement_summary": ("\u516c\u544a",),
+    }
+
+    # --- Phase 1: Fallback topic tags keyed by legacy question_type ---
+    # Used by _extract_topic_tags when no query-level keywords are matched.
+    QUESTION_TYPE_FALLBACK_TOPIC_TAGS: dict[str, tuple[str, ...]] = {
+        "theme_impact_review": ("題材", "產業"),
+        "shipping_rate_impact_review": ("航運", "SCFI"),
+        "electricity_cost_impact_review": ("電價", "成本"),
+        "macro_yield_sentiment_review": ("CPI", "殖利率"),
+        "guidance_reaction_review": ("法說", "指引"),
+        "listing_revenue_review": ("上市", "營收"),
+        "monthly_revenue_yoy_review": ("月營收",),
+        "margin_turnaround_review": ("毛利率", "轉正"),
+        "gross_margin_comparison_review": ("毛利率", "比較"),
+        "pe_valuation_review": ("本益比",),
+        "fundamental_pe_review": ("基本面", "本益比"),
+        "price_range": ("股價區間",),
+        "price_outlook": ("股價", "展望"),
+        "dividend_yield_review": ("股利", "殖利率"),
+        "ex_dividend_performance": ("除息", "填息"),
+        "fcf_dividend_sustainability_review": ("股利", "現金流"),
+        "debt_dividend_safety_review": ("股利", "負債"),
+        "profitability_stability_review": ("獲利", "穩定性"),
+        "revenue_growth_review": ("營收", "成長"),
+        "technical_indicator_review": ("技術面",),
+        "season_line_margin_review": ("季線", "籌碼"),
+        "earnings_summary": ("財報",),
+        "eps_dividend_review": ("EPS", "股利"),
+        "investment_support": ("投資評估",),
+        "risk_review": ("風險",),
+        "announcement_summary": ("公告",),
+    }
+
+    # Keywords grouped by domain — matched against the user query to produce topic_tags.
+    _TOPIC_TAG_KEYWORD_MAP: dict[str, tuple[str, ...]] = {
+        "航運": ("紅海", "航線", "SCFI", "scfi", "運價", "集運", "航運", "散裝"),
+        "電價": ("工業電價", "電價", "調漲", "漲價", "電費", "用電大戶", "節能", "節電"),
+        "總經": ("CPI", "cpi", "通膨", "利率", "殖利率", "美債", "降息", "升息", "聯準會"),
+        "法說": ("法說", "法說會", "營運指引", "指引", "財測", "展望"),
+        "技術面": ("RSI", "rsi", "KD", "kd", "MACD", "macd", "布林通道", "均線", "乖離", "超買", "超賣"),
+        "籌碼": ("融資", "融券", "信用交易", "籌碼", "季線", "60日線", "60MA", "ma60"),
+        "半導體設備": ("半導體設備", "設備族群", "設備股", "ASML", "asml", "艾司摩爾"),
+        "電動車": ("電動車", "EV", "ev", "電池", "供應鏈", "普及率"),
+        "AI": ("AI", "ai", "伺服器", "server", "AI伺服器"),
+        "股利": ("股利", "配息", "現金股利", "除息", "殖利率", "填息", "填權"),
+        "月營收": ("月營收", "累計營收", "年增", "月增", "MoM", "mom", "創新高"),
+        "毛利率": ("毛利率", "毛利", "營業毛利", "經營效率"),
+        "基本面": ("基本面", "體質", "營運"),
+        "本益比": ("本益比", "P/E", "p/e", "PE ratio", "估值"),
+        "現金流": ("自由現金流", "FCF", "fcf", "營業現金流", "現金流"),
+        "負債": ("負債比率", "負債比", "負債總額", "槓桿"),
+        "上市": ("轉上市", "上市", "掛牌", "IPO", "ipo", "新上市"),
+    }
 
     def __init__(self, stock_resolver: StockResolver | None = None) -> None:
         self._stock_resolver = stock_resolver
@@ -381,6 +461,8 @@ class InputLayer:
 
         topic = request.topic or self._detect_topic(query_text)
         question_type = self._detect_question_type(query_text, topic, len(stock_mentions))
+        intent = infer_intent_from_question_type(question_type)
+        topic_tags = self._extract_topic_tags(query_text, question_type)
         time_range_label, time_range_days = self._detect_time_range(
             query_text,
             request.time_range,
@@ -398,6 +480,8 @@ class InputLayer:
             topic=topic,
             time_range_label=time_range_label,
             time_range_days=time_range_days,
+            intent=intent,
+            topic_tags=topic_tags,
             question_type=question_type,
             stance_bias=stance_bias,
         )
@@ -924,6 +1008,47 @@ class InputLayer:
         if topic == Topic.ANNOUNCEMENT:
             return "announcement_summary"
         return "market_summary"
+
+    def _extract_topic_tags(self, query: str, question_type: str) -> list[str]:
+        """Extract topic tags from the user query.
+
+        Returns domain labels (e.g. "航運") **and** the specific keywords that
+        matched (e.g. "SCFI", "紅海"), giving downstream layers both a
+        categorical signal and concrete search terms.
+
+        Falls back to ``QUESTION_TYPE_FALLBACK_TOPIC_TAGS`` when nothing is
+        matched from the query text.
+        """
+        lowered = query.lower()
+        compacted = self._compact_query(query)
+        seen: set[str] = set()
+        tags: list[str] = []
+
+        for domain_label, keywords in self._TOPIC_TAG_KEYWORD_MAP.items():
+            matched_keywords: list[str] = []
+            for kw in keywords:
+                if (
+                    kw.lower() in lowered
+                    or kw in query
+                    or kw.lower().replace(" ", "") in compacted
+                ):
+                    if kw not in seen:
+                        seen.add(kw)
+                        matched_keywords.append(kw)
+            if matched_keywords:
+                # Domain label first, then the specific keywords
+                if domain_label not in seen:
+                    seen.add(domain_label)
+                    tags.append(domain_label)
+                tags.extend(matched_keywords)
+
+        if tags:
+            return tags
+
+        fallback = self.QUESTION_TYPE_FALLBACK_TOPIC_TAGS.get(question_type)
+        if fallback:
+            return list(fallback)
+        return []
 
     def _detect_stance_bias(self, query: str) -> StanceBias:
         compacted = self._compact_query(query)

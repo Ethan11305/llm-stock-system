@@ -1,0 +1,3 @@
+{
+  "tests/test_revenue_and_pe_queries.py::RevenueAndPEQueryTestCase::test_input_layer_detects_pe_valuation_review": true
+}
