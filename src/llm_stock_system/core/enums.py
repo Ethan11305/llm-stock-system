@@ -66,3 +66,29 @@ class DataFacet(str, Enum):
     PE_VALUATION = "pe_valuation"
     MARGIN_DATA = "margin_data"
     NEWS = "news"
+
+
+class TopicTag(str, Enum):
+    """Controlled vocabulary for analysis topics.
+
+    Used as ``controlled_tags`` on ``StructuredQuery``.  Each value is a
+    human-readable Chinese label that is also stable enough to be used as a
+    routing signal in the Retrieval and Generation layers.
+    """
+    SHIPPING       = "航運"
+    ELECTRICITY    = "電價"
+    MACRO          = "總經"
+    GUIDANCE       = "法說"
+    TECHNICAL      = "技術面"
+    MARGIN_FLOW    = "籌碼"
+    SEMICON_EQUIP  = "半導體設備"
+    EV             = "電動車"
+    AI             = "AI"
+    DIVIDEND       = "股利"
+    REVENUE        = "月營收"
+    GROSS_MARGIN   = "毛利率"
+    VALUATION      = "本益比"
+    FUNDAMENTAL    = "基本面"
+    CASH_FLOW      = "現金流"
+    DEBT           = "負債"
+    LISTING        = "上市"

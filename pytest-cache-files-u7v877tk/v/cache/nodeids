@@ -82,5 +82,8 @@
   "tests/test_target_price_queries.py::TargetPriceQueryTestCase::test_validation_marks_breakout_question_without_price_context_as_red",
   "tests/test_target_price_queries.py::TargetPriceQueryTestCase::test_validation_marks_target_price_without_context_as_red",
   "tests/test_theme_impact_queries.py::ThemeImpactQueryTestCase::test_input_layer_detects_semiconductor_equipment_theme_query",
-  "tests/test_theme_impact_queries.py::ThemeImpactQueryTestCase::test_pipeline_returns_grounded_theme_impact_summary"
+  "tests/test_theme_impact_queries.py::ThemeImpactQueryTestCase::test_pipeline_returns_grounded_theme_impact_summary",
+  "tests/test_topic_tag_coverage.py::TopicTagCoverageTestCase::test_investment_support_query_falls_back_to_free_keywords",
+  "tests/test_topic_tag_coverage.py::TopicTagCoverageTestCase::test_semiconductor_equipment_query_hits_semicon_equip_tag",
+  "tests/test_topic_tag_coverage.py::TopicTagCoverageTestCase::test_shipping_query_hits_shipping_topic_tags"
 ]

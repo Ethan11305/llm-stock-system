@@ -1,8 +1,8 @@
 import re
 
-from llm_stock_system.core.enums import StanceBias, Topic
+from llm_stock_system.core.enums import StanceBias, Topic, TopicTag
 from llm_stock_system.core.interfaces import StockResolver
-from llm_stock_system.core.models import QueryRequest, StructuredQuery, infer_intent_from_question_type, infer_intent_from_question_type
+from llm_stock_system.core.models import QueryRequest, StructuredQuery, infer_intent_from_question_type
 
 
 class InputLayer:
@@ -331,37 +331,8 @@ class InputLayer:
         "\u89c0\u9ede",
         "\u6700\u65b0\u89c0\u9ede",
     )
-    QUESTION_TYPE_FALLBACK_TOPIC_TAGS = {
-        "theme_impact_review": ("\u984c\u6750", "\u7522\u696d"),
-        "shipping_rate_impact_review": ("\u822a\u904b", "SCFI"),
-        "electricity_cost_impact_review": ("\u96fb\u50f9", "\u6210\u672c"),
-        "macro_yield_sentiment_review": ("CPI", "\u6b96\u5229\u7387"),
-        "guidance_reaction_review": ("\u6cd5\u8aaa", "\u6307\u5f15"),
-        "listing_revenue_review": ("\u4e0a\u5e02", "\u71df\u6536"),
-        "monthly_revenue_yoy_review": ("\u6708\u71df\u6536",),
-        "margin_turnaround_review": ("\u6bdb\u5229\u7387", "\u8f49\u6b63"),
-        "gross_margin_comparison_review": ("\u6bdb\u5229\u7387", "\u6bd4\u8f03"),
-        "pe_valuation_review": ("\u672c\u76ca\u6bd4",),
-        "fundamental_pe_review": ("\u57fa\u672c\u9762", "\u672c\u76ca\u6bd4"),
-        "price_range": ("\u80a1\u50f9\u5340\u9593",),
-        "price_outlook": ("\u80a1\u50f9", "\u5c55\u671b"),
-        "dividend_yield_review": ("\u80a1\u5229", "\u6b96\u5229\u7387"),
-        "ex_dividend_performance": ("\u9664\u606f", "\u586b\u606f"),
-        "fcf_dividend_sustainability_review": ("\u80a1\u5229", "\u73fe\u91d1\u6d41"),
-        "debt_dividend_safety_review": ("\u80a1\u5229", "\u8ca0\u50b5"),
-        "profitability_stability_review": ("\u7372\u5229", "\u7a69\u5b9a\u6027"),
-        "revenue_growth_review": ("\u71df\u6536", "\u6210\u9577"),
-        "technical_indicator_review": ("\u6280\u8853\u9762",),
-        "season_line_margin_review": ("\u5b63\u7dda", "\u7c4c\u78bc"),
-        "earnings_summary": ("\u8ca1\u5831",),
-        "eps_dividend_review": ("EPS", "\u80a1\u5229"),
-        "investment_support": ("\u6295\u8cc7\u8a55\u4f30",),
-        "risk_review": ("\u98a8\u96aa",),
-        "announcement_summary": ("\u516c\u544a",),
-    }
-
-    # --- Phase 1: Fallback topic tags keyed by legacy question_type ---
-    # Used by _extract_topic_tags when no query-level keywords are matched.
+    # --- Phase 1/2: topic tag infrastructure ---
+    # Single authoritative QUESTION_TYPE_FALLBACK_TOPIC_TAGS
     QUESTION_TYPE_FALLBACK_TOPIC_TAGS: dict[str, tuple[str, ...]] = {
         "theme_impact_review": ("題材", "產業"),
         "shipping_rate_impact_review": ("航運", "SCFI"),
@@ -391,25 +362,24 @@ class InputLayer:
         "announcement_summary": ("公告",),
     }
 
-    # Keywords grouped by domain — matched against the user query to produce topic_tags.
-    _TOPIC_TAG_KEYWORD_MAP: dict[str, tuple[str, ...]] = {
-        "航運": ("紅海", "航線", "SCFI", "scfi", "運價", "集運", "航運", "散裝"),
-        "電價": ("工業電價", "電價", "調漲", "漲價", "電費", "用電大戶", "節能", "節電"),
-        "總經": ("CPI", "cpi", "通膨", "利率", "殖利率", "美債", "降息", "升息", "聯準會"),
-        "法說": ("法說", "法說會", "營運指引", "指引", "財測", "展望"),
-        "技術面": ("RSI", "rsi", "KD", "kd", "MACD", "macd", "布林通道", "均線", "乖離", "超買", "超賣"),
-        "籌碼": ("融資", "融券", "信用交易", "籌碼", "季線", "60日線", "60MA", "ma60"),
-        "半導體設備": ("半導體設備", "設備族群", "設備股", "ASML", "asml", "艾司摩爾"),
-        "電動車": ("電動車", "EV", "ev", "電池", "供應鏈", "普及率"),
-        "AI": ("AI", "ai", "伺服器", "server", "AI伺服器"),
-        "股利": ("股利", "配息", "現金股利", "除息", "殖利率", "填息", "填權"),
-        "月營收": ("月營收", "累計營收", "年增", "月增", "MoM", "mom", "創新高"),
-        "毛利率": ("毛利率", "毛利", "營業毛利", "經營效率"),
-        "基本面": ("基本面", "體質", "營運"),
-        "本益比": ("本益比", "P/E", "p/e", "PE ratio", "估值"),
-        "現金流": ("自由現金流", "FCF", "fcf", "營業現金流", "現金流"),
-        "負債": ("負債比率", "負債比", "負債總額", "槓桿"),
-        "上市": ("轉上市", "上市", "掛牌", "IPO", "ipo", "新上市"),
+    _TOPIC_TAG_KEYWORD_MAP: dict[TopicTag, tuple[str, ...]] = {
+        TopicTag.SHIPPING: ("\u822a\u904b", "\u96c6\u904b", "\u822a\u7dda", "SCFI", "scfi", "\u904b\u50f9", "\u904b\u50f9\u6307\u6578", "\u7d05\u6d77"),
+        TopicTag.ELECTRICITY: ("\u5de5\u696d\u96fb\u50f9", "\u96fb\u50f9", "\u96fb\u8cbb", "\u8abf\u6f32", "\u6f32\u50f9", "\u7528\u96fb"),
+        TopicTag.MACRO: ("CPI", "cpi", "\u901a\u81a8", "\u7f8e\u50b5", "\u5229\u7387", "\u6b96\u5229\u7387", "\u964d\u606f", "\u5347\u606f"),
+        TopicTag.GUIDANCE: ("\u6cd5\u8aaa", "\u6cd5\u8aaa\u6703", "\u71df\u904b\u6307\u5f15", "\u6307\u5f15", "\u8ca1\u6e2c", "\u5c55\u671b"),
+        TopicTag.TECHNICAL: ("RSI", "rsi", "KD", "kd", "MACD", "macd", "\u6280\u8853\u6307\u6a19", "\u5747\u7dda", "\u8d85\u8cb7", "\u8d85\u8ce3"),
+        TopicTag.MARGIN_FLOW: ("\u878d\u8cc7", "\u878d\u5238", "\u4fe1\u7528\u4ea4\u6613", "\u7c4c\u78bc", "\u5b63\u7dda", "60MA", "60ma", "ma60"),
+        TopicTag.SEMICON_EQUIP: ("\u534a\u5c0e\u9ad4\u8a2d\u5099", "\u8a2d\u5099\u80a1", "\u8a2d\u5099\u65cf\u7fa4", "ASML", "asml", "\u827e\u53f8\u6469\u723e"),
+        TopicTag.EV: ("\u96fb\u52d5\u8eca", "EV", "ev", "\u96fb\u6c60", "\u4f9b\u61c9\u93c8"),
+        TopicTag.AI: ("AI", "ai", "\u4f3a\u670d\u5668", "server"),
+        TopicTag.DIVIDEND: ("\u80a1\u5229", "\u914d\u606f", "\u73fe\u91d1\u80a1\u5229", "\u9664\u606f", "\u9664\u6b0a", "\u6b96\u5229\u7387"),
+        TopicTag.REVENUE: ("\u71df\u6536", "\u6708\u71df\u6536", "\u7d2f\u8a08\u71df\u6536", "MoM", "mom", "\u5e74\u589e", "\u6708\u589e"),
+        TopicTag.GROSS_MARGIN: ("\u6bdb\u5229\u7387", "\u6bdb\u5229", "\u71df\u696d\u6bdb\u5229"),
+        TopicTag.VALUATION: ("\u672c\u76ca\u6bd4", "P/E", "p/e", "pe ratio", "\u4f30\u503c"),
+        TopicTag.FUNDAMENTAL: ("\u57fa\u672c\u9762", "\u9ad4\u8cea", "\u71df\u904b", "EPS", "eps"),
+        TopicTag.CASH_FLOW: ("\u73fe\u91d1\u6d41", "\u81ea\u7531\u73fe\u91d1\u6d41", "FCF", "fcf", "\u71df\u696d\u73fe\u91d1\u6d41"),
+        TopicTag.DEBT: ("\u8ca0\u50b5", "\u8ca0\u50b5\u6bd4", "\u8ca0\u50b5\u6bd4\u7387", "\u69d3\u687f"),
+        TopicTag.LISTING: ("\u4e0a\u5e02", "\u639b\u724c", "\u8f49\u4e0a\u5e02", "IPO", "ipo"),
     }
 
     def __init__(self, stock_resolver: StockResolver | None = None) -> None:
@@ -462,7 +432,8 @@ class InputLayer:
         topic = request.topic or self._detect_topic(query_text)
         question_type = self._detect_question_type(query_text, topic, len(stock_mentions))
         intent = infer_intent_from_question_type(question_type)
-        topic_tags = self._extract_topic_tags(query_text, question_type)
+        controlled_tags, free_keywords = self._extract_topic_tags(query_text, question_type)
+        tag_source = "matched" if controlled_tags else "fallback" if free_keywords else "empty"
         time_range_label, time_range_days = self._detect_time_range(
             query_text,
             request.time_range,
@@ -481,7 +452,9 @@ class InputLayer:
             time_range_label=time_range_label,
             time_range_days=time_range_days,
             intent=intent,
-            topic_tags=topic_tags,
+            controlled_tags=controlled_tags,
+            free_keywords=free_keywords,
+            tag_source=tag_source,
             question_type=question_type,
             stance_bias=stance_bias,
         )
@@ -1009,46 +982,48 @@ class InputLayer:
             return "announcement_summary"
         return "market_summary"
 
-    def _extract_topic_tags(self, query: str, question_type: str) -> list[str]:
+    def _extract_topic_tags(
+        self, query: str, question_type: str
+    ) -> tuple[list["TopicTag"], list[str]]:
         """Extract topic tags from the user query.
 
-        Returns domain labels (e.g. "航運") **and** the specific keywords that
-        matched (e.g. "SCFI", "紅海"), giving downstream layers both a
-        categorical signal and concrete search terms.
+        Returns ``(controlled_tags, free_keywords)`` where:
+        - ``controlled_tags``: matched ``TopicTag`` enum values (categorical signal
+          for routing and observability)
+        - ``free_keywords``: the specific raw keywords that triggered each tag
+          (used as search terms in the Retrieval Layer)
 
-        Falls back to ``QUESTION_TYPE_FALLBACK_TOPIC_TAGS`` when nothing is
-        matched from the query text.
+        Falls back to ``QUESTION_TYPE_FALLBACK_TOPIC_TAGS`` (as plain strings in
+        ``free_keywords``) when no keyword in the query matches the map.
         """
+        from llm_stock_system.core.enums import TopicTag as _TopicTag
+
         lowered = query.lower()
         compacted = self._compact_query(query)
-        seen: set[str] = set()
-        tags: list[str] = []
+        seen_kw: set[str] = set()
+        matched_tags: list[_TopicTag] = []
+        matched_keywords: list[str] = []
 
-        for domain_label, keywords in self._TOPIC_TAG_KEYWORD_MAP.items():
-            matched_keywords: list[str] = []
-            for kw in keywords:
+        for tag, keywords in self._TOPIC_TAG_KEYWORD_MAP.items():
+            kws_hit = [
+                kw for kw in keywords
                 if (
                     kw.lower() in lowered
                     or kw in query
                     or kw.lower().replace(" ", "") in compacted
-                ):
-                    if kw not in seen:
-                        seen.add(kw)
-                        matched_keywords.append(kw)
-            if matched_keywords:
-                # Domain label first, then the specific keywords
-                if domain_label not in seen:
-                    seen.add(domain_label)
-                    tags.append(domain_label)
-                tags.extend(matched_keywords)
+                )
+                and kw not in seen_kw
+            ]
+            if kws_hit:
+                matched_tags.append(tag)
+                seen_kw.update(kws_hit)
+                matched_keywords.extend(kws_hit)
 
-        if tags:
-            return tags
+        if matched_tags:
+            return matched_tags, matched_keywords
 
-        fallback = self.QUESTION_TYPE_FALLBACK_TOPIC_TAGS.get(question_type)
-        if fallback:
-            return list(fallback)
-        return []
+        fallback = self.QUESTION_TYPE_FALLBACK_TOPIC_TAGS.get(question_type, ())
+        return [], list(fallback)
 
     def _detect_stance_bias(self, query: str) -> StanceBias:
         compacted = self._compact_query(query)

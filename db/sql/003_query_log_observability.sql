@@ -1,0 +1,5 @@
+ALTER TABLE query_logs
+    ADD COLUMN IF NOT EXISTS intent VARCHAR(32),
+    ADD COLUMN IF NOT EXISTS controlled_tags TEXT[],
+    ADD COLUMN IF NOT EXISTS facet_miss_list TEXT[],
+    ADD COLUMN IF NOT EXISTS tag_source VARCHAR(16);

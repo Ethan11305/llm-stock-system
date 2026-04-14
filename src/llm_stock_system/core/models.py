@@ -1,4 +1,5 @@
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import datetime
 from uuid import uuid4
 
@@ -14,6 +15,7 @@ from .enums import (
     StanceBias,
     SufficiencyStatus,
     Topic,
+    TopicTag,
 )
 
 
@@ -47,48 +49,57 @@ QUESTION_TYPE_TO_INTENT: dict[str, Intent] = {
     "announcement_summary": Intent.INVESTMENT_ASSESSMENT,
 }
 
+@dataclass(frozen=True)
+class FacetSpec:
+    required: frozenset[DataFacet]
+    preferred: frozenset[DataFacet]
+
+
+INTENT_FACET_SPECS: dict[Intent, FacetSpec] = {
+    Intent.NEWS_DIGEST: FacetSpec(
+        required=frozenset({DataFacet.NEWS}),
+        preferred=frozenset({DataFacet.PRICE_HISTORY}),
+    ),
+    Intent.EARNINGS_REVIEW: FacetSpec(
+        required=frozenset({DataFacet.FINANCIAL_STATEMENTS}),
+        preferred=frozenset({DataFacet.MONTHLY_REVENUE, DataFacet.NEWS}),
+    ),
+    Intent.VALUATION_CHECK: FacetSpec(
+        required=frozenset({DataFacet.PE_VALUATION}),
+        preferred=frozenset(
+            {
+                DataFacet.PRICE_HISTORY,
+                DataFacet.FINANCIAL_STATEMENTS,
+                DataFacet.NEWS,
+            }
+        ),
+    ),
+    Intent.DIVIDEND_ANALYSIS: FacetSpec(
+        required=frozenset({DataFacet.DIVIDEND}),
+        preferred=frozenset(
+            {
+                DataFacet.CASH_FLOW,
+                DataFacet.BALANCE_SHEET,
+                DataFacet.FINANCIAL_STATEMENTS,
+            }
+        ),
+    ),
+    Intent.FINANCIAL_HEALTH: FacetSpec(
+        required=frozenset({DataFacet.FINANCIAL_STATEMENTS}),
+        preferred=frozenset({DataFacet.MONTHLY_REVENUE, DataFacet.NEWS}),
+    ),
+    Intent.TECHNICAL_VIEW: FacetSpec(
+        required=frozenset({DataFacet.PRICE_HISTORY}),
+        preferred=frozenset({DataFacet.MARGIN_DATA}),
+    ),
+    Intent.INVESTMENT_ASSESSMENT: FacetSpec(
+        required=frozenset({DataFacet.FINANCIAL_STATEMENTS, DataFacet.PE_VALUATION}),
+        preferred=frozenset({DataFacet.DIVIDEND, DataFacet.NEWS, DataFacet.PRICE_HISTORY}),
+    ),
+}
+
 INTENT_FACETS: dict[Intent, frozenset[DataFacet]] = {
-    Intent.NEWS_DIGEST: frozenset({DataFacet.NEWS, DataFacet.PRICE_HISTORY}),
-    Intent.EARNINGS_REVIEW: frozenset(
-        {
-            DataFacet.FINANCIAL_STATEMENTS,
-            DataFacet.MONTHLY_REVENUE,
-            DataFacet.NEWS,
-        }
-    ),
-    Intent.VALUATION_CHECK: frozenset(
-        {
-            DataFacet.PE_VALUATION,
-            DataFacet.PRICE_HISTORY,
-            DataFacet.FINANCIAL_STATEMENTS,
-            DataFacet.NEWS,
-        }
-    ),
-    Intent.DIVIDEND_ANALYSIS: frozenset(
-        {
-            DataFacet.DIVIDEND,
-            DataFacet.CASH_FLOW,
-            DataFacet.BALANCE_SHEET,
-            DataFacet.FINANCIAL_STATEMENTS,
-        }
-    ),
-    Intent.FINANCIAL_HEALTH: frozenset(
-        {
-            DataFacet.FINANCIAL_STATEMENTS,
-            DataFacet.MONTHLY_REVENUE,
-            DataFacet.NEWS,
-        }
-    ),
-    Intent.TECHNICAL_VIEW: frozenset({DataFacet.PRICE_HISTORY, DataFacet.MARGIN_DATA}),
-    Intent.INVESTMENT_ASSESSMENT: frozenset(
-        {
-            DataFacet.FINANCIAL_STATEMENTS,
-            DataFacet.PE_VALUATION,
-            DataFacet.DIVIDEND,
-            DataFacet.NEWS,
-            DataFacet.PRICE_HISTORY,
-        }
-    ),
+    intent: spec.required | spec.preferred for intent, spec in INTENT_FACET_SPECS.items()
 }
 
 
@@ -100,16 +111,32 @@ def infer_intent_from_question_type(question_type: str | None) -> Intent:
 
 def infer_data_facets(
     intent: Intent | str | None,
-    extra_facets: set[DataFacet | str] | list[DataFacet | str] | None = None,
-) -> set[DataFacet | str]:
-    facets = set(extra_facets or [])
-    if intent is None:
-        return facets
+    extra_required: set[DataFacet | str] | list[DataFacet | str] | None = None,
+    extra_preferred: set[DataFacet | str] | list[DataFacet | str] | None = None,
+) -> tuple[set[DataFacet | str], set[DataFacet | str]]:
+    required = set(extra_required or [])
+    preferred = set(extra_preferred or [])
     try:
-        resolved_intent = intent if isinstance(intent, Intent) else Intent(intent)
+        resolved_intent = intent if isinstance(intent, Intent) else Intent(intent) if intent is not None else None
     except ValueError:
-        return facets
-    return set(INTENT_FACETS.get(resolved_intent, frozenset())) | facets
+        resolved_intent = None
+
+    if resolved_intent is None:
+        return required, preferred
+
+    spec = INTENT_FACET_SPECS.get(resolved_intent, FacetSpec(frozenset(), frozenset()))
+    return set(spec.required) | required, set(spec.preferred) | preferred
+
+
+def _dedupe_preserving_order(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        deduped.append(value)
+    return deduped
 
 
 class QueryRequest(BaseModel):
@@ -131,8 +158,13 @@ class StructuredQuery(BaseModel):
     time_range_label: str = "7d"
     time_range_days: int = 7
     intent: Intent = Intent.NEWS_DIGEST
+    required_facets: set[DataFacet] = Field(default_factory=set)
+    preferred_facets: set[DataFacet] = Field(default_factory=set)
     data_facets: set[DataFacet] = Field(default_factory=set)
+    controlled_tags: list[TopicTag] = Field(default_factory=list)
+    free_keywords: list[str] = Field(default_factory=list)
     topic_tags: list[str] = Field(default_factory=list)
+    tag_source: str = "empty"
     question_type: str = "market_summary"
     stance_bias: StanceBias = StanceBias.NEUTRAL
 
@@ -146,10 +178,37 @@ class StructuredQuery(BaseModel):
         question_type = values.get("question_type")
         if values.get("intent") in (None, ""):
             values["intent"] = infer_intent_from_question_type(question_type)
-        values["data_facets"] = infer_data_facets(
+
+        required_facets, preferred_facets = infer_data_facets(
             values.get("intent"),
-            values.get("data_facets"),
+            values.get("required_facets"),
+            values.get("preferred_facets"),
         )
+
+        legacy_data_facets = set(values.get("data_facets") or [])
+        preferred_facets |= legacy_data_facets - required_facets
+        values["required_facets"] = required_facets
+        values["preferred_facets"] = preferred_facets
+        values["data_facets"] = required_facets | preferred_facets
+
+        controlled_tags = list(values.get("controlled_tags") or [])
+        free_keywords = list(values.get("free_keywords") or [])
+        if controlled_tags or free_keywords:
+            values["topic_tags"] = _dedupe_preserving_order(
+                [tag.value if isinstance(tag, TopicTag) else str(tag) for tag in controlled_tags]
+                + [str(keyword) for keyword in free_keywords]
+            )
+        elif "topic_tags" not in values:
+            values["topic_tags"] = []
+
+        if values.get("tag_source") in (None, ""):
+            if controlled_tags:
+                values["tag_source"] = "matched"
+            elif free_keywords:
+                values["tag_source"] = "fallback"
+            else:
+                values["tag_source"] = "empty"
+
         return values
 
 
