@@ -1,44 +1,90 @@
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
+import time
 from threading import Lock, Thread
 
-from llm_stock_system.core.models import StructuredQuery, ValidationResult
+from llm_stock_system.core.enums import DataFacet, Intent
+from llm_stock_system.core.models import HydrationResult, StructuredQuery, ValidationResult
+
+
+@dataclass(frozen=True)
+class FacetSyncRule:
+    gateway_method: str
+    requires_dates: bool = False
+    default_window_days: int | None = None
+    default_window_years: int | None = None
+    min_window_days: int | None = None
+    min_window_years: int | None = None
+    fallback_method: str | None = None
+    priority: str = "medium"
+
+
+@dataclass
+class FacetSyncResult:
+    facet: DataFacet
+    success: bool
+    exception: Exception | None = None
+    duration_ms: float = 0.0
+    rows_synced: int | None = None
 
 
 class QueryDataHydrator:
-    """Fetches missing market/fundamental data before retrieval runs."""
+    """Fetches missing market data based on intent and facet requirements."""
 
-    PRICE_RELATED_QUESTION_TYPES = {
-        "price_range",
-        "price_outlook",
-        "technical_indicator_review",
-        "season_line_margin_review",
-        "dividend_yield_review",
-        "ex_dividend_performance",
-    }
-    FUNDAMENTAL_QUESTION_TYPES = {
-        "earnings_summary",
-        "eps_dividend_review",
-        "fundamental_pe_review",
-        "investment_support",
-        "margin_turnaround_review",
-        "gross_margin_comparison_review",
-        "profitability_stability_review",
-        "debt_dividend_safety_review",
-        "fcf_dividend_sustainability_review",
-    }
-    NEWS_RELATED_QUESTION_TYPES = {
-        "market_summary",
-        "announcement_summary",
-        "theme_impact_review",
-        "shipping_rate_impact_review",
-        "electricity_cost_impact_review",
-        "macro_yield_sentiment_review",
-        "revenue_growth_review",
-        "monthly_revenue_yoy_review",
-        "listing_revenue_review",
-        "guidance_reaction_review",
-        "fundamental_pe_review",
-        "investment_support",
+    FACET_SYNC_MAP: dict[DataFacet, FacetSyncRule] = {
+        DataFacet.PRICE_HISTORY: FacetSyncRule(
+            gateway_method="sync_price_history",
+            requires_dates=True,
+            default_window_days=120,
+            min_window_days=60,
+            priority="high",
+        ),
+        DataFacet.FINANCIAL_STATEMENTS: FacetSyncRule(
+            gateway_method="sync_financial_statements",
+            requires_dates=True,
+            default_window_years=2,
+            min_window_years=1,
+            priority="high",
+        ),
+        DataFacet.MONTHLY_REVENUE: FacetSyncRule(
+            gateway_method="sync_monthly_revenue_points",
+            priority="medium",
+        ),
+        DataFacet.DIVIDEND: FacetSyncRule(
+            gateway_method="sync_dividend_policies",
+            requires_dates=True,
+            default_window_years=2,
+            priority="high",
+        ),
+        DataFacet.BALANCE_SHEET: FacetSyncRule(
+            gateway_method="sync_balance_sheet_items",
+            requires_dates=True,
+            default_window_years=3,
+            priority="medium",
+        ),
+        DataFacet.CASH_FLOW: FacetSyncRule(
+            gateway_method="sync_cash_flow_statements",
+            requires_dates=True,
+            default_window_years=3,
+            priority="medium",
+        ),
+        DataFacet.PE_VALUATION: FacetSyncRule(
+            gateway_method="sync_pe_valuation_points",
+            priority="high",
+        ),
+        DataFacet.MARGIN_DATA: FacetSyncRule(
+            gateway_method="sync_margin_purchase_short_sale",
+            requires_dates=True,
+            default_window_days=180,
+            priority="low",
+        ),
+        DataFacet.NEWS: FacetSyncRule(
+            gateway_method="sync_stock_news",
+            requires_dates=True,
+            default_window_days=30,
+            fallback_method="sync_query_news",
+            priority="high",
+        ),
     }
 
     def __init__(
@@ -58,70 +104,124 @@ class QueryDataHydrator:
         self._active_follow_up_tickers: set[str] = set()
         self._last_follow_up_at: dict[str, datetime] = {}
 
-    def hydrate(self, query: StructuredQuery) -> None:
+    def hydrate(self, query: StructuredQuery) -> HydrationResult:
+        result = HydrationResult()
         if not query.ticker:
-            return
+            return result
 
         today = datetime.now(timezone.utc).date()
-        tickers = [query.ticker]
-        if query.comparison_ticker and query.comparison_ticker not in tickers:
-            tickers.append(query.comparison_ticker)
+        started_at = time.perf_counter()
+        required_facets = set(query.required_facets)
 
-        self._safe_call(self._gateway.sync_stock_info)
-        if self._should_sync_query_news(query):
-            self._sync_query_news(query, today)
+        self._safe_call(getattr(self._gateway, "sync_stock_info", None))
+        for ticker in self._iter_tickers(query):
+            for facet in self._ordered_facets(query):
+                facet_result = self._sync_facet(facet, ticker, query, today)
+                if facet_result.success:
+                    result.synced_facets.add(facet)
+                    continue
 
-        for ticker in tickers:
-            self._hydrate_ticker(query, ticker, today)
+                result.failed_facets.setdefault(facet, self._format_exception(facet_result.exception))
+                if facet in required_facets and facet.value not in result.facet_miss_list:
+                    result.facet_miss_list.append(facet.value)
 
-    def _hydrate_ticker(self, query: StructuredQuery, ticker: str, today: date) -> None:
+        result.total_duration_ms = (time.perf_counter() - started_at) * 1000
+        return result
+
+    def _ordered_facets(self, query: StructuredQuery) -> list[DataFacet]:
+        requested_facets = set(query.required_facets) | set(query.preferred_facets)
+        configured_facets = [facet for facet in self.FACET_SYNC_MAP if facet in requested_facets]
+        remaining_facets = sorted(requested_facets - set(configured_facets), key=lambda facet: facet.value)
+        return configured_facets + remaining_facets
+
+    def _sync_facet(
+        self,
+        facet: DataFacet,
+        ticker: str,
+        query: StructuredQuery,
+        today: date,
+    ) -> FacetSyncResult:
+        rule = self.FACET_SYNC_MAP.get(facet)
+        if rule is None:
+            return FacetSyncResult(
+                facet=facet,
+                success=False,
+                exception=ValueError(f"Unknown facet: {facet.value}"),
+            )
+
+        started_at = time.perf_counter()
+        try:
+            rows_synced = self._dispatch_facet_sync(rule, facet, ticker, query, today)
+            return FacetSyncResult(
+                facet=facet,
+                success=True,
+                duration_ms=(time.perf_counter() - started_at) * 1000,
+                rows_synced=rows_synced if isinstance(rows_synced, int) else None,
+            )
+        except Exception as exc:
+            return FacetSyncResult(
+                facet=facet,
+                success=False,
+                exception=exc,
+                duration_ms=(time.perf_counter() - started_at) * 1000,
+            )
+
+    def _dispatch_facet_sync(
+        self,
+        rule: FacetSyncRule,
+        facet: DataFacet,
+        ticker: str,
+        query: StructuredQuery,
+        today: date,
+    ) -> int | None:
+        if facet == DataFacet.NEWS and query.intent == Intent.NEWS_DIGEST and rule.fallback_method:
+            query_news_sync = getattr(self._gateway, rule.fallback_method, None)
+            if callable(query_news_sync):
+                return query_news_sync(query)
+
+        sync_method = getattr(self._gateway, rule.gateway_method)
+        if rule.requires_dates:
+            date_range = self._compute_facet_window(facet, query, today)
+            if date_range is None:
+                raise ValueError(f"Facet {facet.value} requires a date window.")
+            start_date, end_date = date_range
+            return sync_method(ticker, start_date, end_date)
+        return sync_method(ticker)
+
+    def _compute_facet_window(
+        self,
+        facet: DataFacet,
+        query: StructuredQuery,
+        today: date,
+    ) -> tuple[date, date] | None:
         history_years = max((query.time_range_days + 364) // 365, 2)
-        price_start = today - timedelta(days=max(query.time_range_days, 120))
-        fundamentals_start = date(today.year - history_years, 1, 1)
-        long_term_start = date(today.year - 3, 1, 1)
-        dividend_start = max(date(today.year - history_years, 1, 1), today - timedelta(days=730))
 
-        if query.question_type in self.PRICE_RELATED_QUESTION_TYPES:
-            self._safe_call(self._gateway.sync_price_history, ticker, price_start, today)
+        if facet == DataFacet.PRICE_HISTORY:
+            baseline_days = 180 if query.question_type == "technical_indicator_review" else 120
+            return today - timedelta(days=max(query.time_range_days, baseline_days)), today
 
-        if query.question_type == "technical_indicator_review":
-            self._safe_call(self._gateway.sync_price_history, ticker, today - timedelta(days=180), today)
+        if facet == DataFacet.FINANCIAL_STATEMENTS:
+            return date(today.year - history_years, 1, 1), today
 
-        if query.question_type == "season_line_margin_review":
-            self._safe_call(self._gateway.sync_margin_purchase_short_sale, ticker, today - timedelta(days=180), today)
+        if facet == DataFacet.DIVIDEND:
+            start_date = max(date(today.year - history_years, 1, 1), today - timedelta(days=730))
+            return start_date, today
 
-        if query.question_type == "monthly_revenue_yoy_review":
-            self._safe_call(self._gateway.sync_monthly_revenue_points, ticker)
+        if facet in {DataFacet.BALANCE_SHEET, DataFacet.CASH_FLOW}:
+            return date(today.year - 3, 1, 1), today
 
-        if query.question_type == "listing_revenue_review":
-            self._safe_call(self._gateway.sync_monthly_revenue_points, ticker)
+        if facet == DataFacet.MARGIN_DATA:
+            return today - timedelta(days=180), today
 
-        if query.question_type in {"pe_valuation_review", "fundamental_pe_review", "investment_support"}:
-            self._safe_call(self._gateway.sync_pe_valuation_points, ticker)
+        if facet == DataFacet.NEWS:
+            if query.question_type == "profitability_stability_review":
+                return date(today.year - 3, 1, 1), today
+            return today - timedelta(days=max(query.time_range_days, 30)), today
 
-        if query.question_type in {"fundamental_pe_review", "investment_support"}:
-            self._safe_call(self._gateway.sync_monthly_revenue_points, ticker)
+        if facet in {DataFacet.MONTHLY_REVENUE, DataFacet.PE_VALUATION}:
+            return None
 
-        if query.question_type in self.FUNDAMENTAL_QUESTION_TYPES:
-            self._safe_call(self._gateway.sync_financial_statements, ticker, fundamentals_start, today)
-
-        if query.question_type in {"debt_dividend_safety_review", "fcf_dividend_sustainability_review"}:
-            self._safe_call(self._gateway.sync_balance_sheet_items, ticker, long_term_start, today)
-            self._safe_call(self._gateway.sync_cash_flow_statements, ticker, long_term_start, today)
-
-        if query.question_type in {
-            "eps_dividend_review",
-            "dividend_yield_review",
-            "ex_dividend_performance",
-            "debt_dividend_safety_review",
-            "fcf_dividend_sustainability_review",
-            "announcement_summary",
-        }:
-            self._safe_call(self._gateway.sync_dividend_policies, ticker, dividend_start, today)
-
-        if query.question_type in {"announcement_summary", "market_summary"}:
-            self._safe_call(self._gateway.sync_financial_statements, ticker, fundamentals_start, today)
-            self._safe_call(self._gateway.sync_dividend_policies, ticker, dividend_start, today)
+        return None
 
     def schedule_follow_up(self, query: StructuredQuery, validation_result: ValidationResult) -> bool:
         if not self._should_schedule_follow_up(query, validation_result):
@@ -145,28 +245,18 @@ class QueryDataHydrator:
         return scheduled
 
     def _safe_call(self, fn, *args) -> None:
+        if not callable(fn):
+            return
         try:
             fn(*args)
         except Exception:
             pass
 
-    def _should_sync_query_news(self, query: StructuredQuery) -> bool:
-        return query.question_type in self.NEWS_RELATED_QUESTION_TYPES or query.question_type in {
-            "season_line_margin_review",
-            "profitability_stability_review",
-        }
-
-    def _sync_query_news(self, query: StructuredQuery, today: date) -> None:
-        sync_query_news = getattr(self._gateway, "sync_query_news", None)
-        if callable(sync_query_news):
-            self._safe_call(sync_query_news, query)
-            return
-
-        news_start = today - timedelta(days=max(query.time_range_days, 30))
-        if query.question_type == "profitability_stability_review":
-            news_start = date(today.year - 3, 1, 1)
-        for ticker in self._iter_tickers(query):
-            self._safe_call(self._gateway.sync_stock_news, ticker, news_start, today)
+    def _format_exception(self, exception: Exception | None) -> str:
+        if exception is None:
+            return "Unknown sync failure."
+        message = str(exception).strip()
+        return message or exception.__class__.__name__
 
     def _should_schedule_follow_up(
         self,
@@ -214,17 +304,18 @@ class QueryDataHydrator:
         news_start = today - timedelta(days=365)
 
         try:
-            self._safe_call(self._gateway.sync_stock_info)
-            self._safe_call(self._gateway.sync_price_history, ticker, price_start, today)
-            self._safe_call(self._gateway.sync_financial_statements, ticker, financial_start, today)
-            self._safe_call(self._gateway.sync_balance_sheet_items, ticker, financial_start, today)
-            self._safe_call(self._gateway.sync_cash_flow_statements, ticker, financial_start, today)
-            self._safe_call(self._gateway.sync_dividend_policies, ticker, financial_start, today)
-            self._safe_call(self._gateway.sync_monthly_revenue_points, ticker)
-            self._safe_call(self._gateway.sync_pe_valuation_points, ticker)
-            self._safe_call(self._gateway.sync_margin_purchase_short_sale, ticker, margin_start, today)
-            self._safe_call(self._gateway.sync_stock_news, ticker, news_start, today)
+            self._safe_call(getattr(self._gateway, "sync_stock_info", None))
+            self._safe_call(getattr(self._gateway, "sync_price_history", None), ticker, price_start, today)
+            self._safe_call(getattr(self._gateway, "sync_financial_statements", None), ticker, financial_start, today)
+            self._safe_call(getattr(self._gateway, "sync_balance_sheet_items", None), ticker, financial_start, today)
+            self._safe_call(getattr(self._gateway, "sync_cash_flow_statements", None), ticker, financial_start, today)
+            self._safe_call(getattr(self._gateway, "sync_dividend_policies", None), ticker, financial_start, today)
+            self._safe_call(getattr(self._gateway, "sync_monthly_revenue_points", None), ticker)
+            self._safe_call(getattr(self._gateway, "sync_pe_valuation_points", None), ticker)
+            self._safe_call(getattr(self._gateway, "sync_margin_purchase_short_sale", None), ticker, margin_start, today)
+            self._safe_call(getattr(self._gateway, "sync_stock_news", None), ticker, news_start, today)
         finally:
             with self._warmup_lock:
                 self._active_follow_up_tickers.discard(ticker)
                 self._last_follow_up_at[ticker] = datetime.now(timezone.utc)
+    

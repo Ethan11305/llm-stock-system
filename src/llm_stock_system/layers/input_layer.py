@@ -702,6 +702,10 @@ class InputLayer:
             keyword in lowered or keyword in query or keyword.lower().replace(" ", "") in compacted
             for keyword in self.FUNDAMENTAL_OVERVIEW_KEYWORDS
         )
+        has_combined_fundamental_prompt = any(
+            token in query or token.lower().replace(" ", "") in compacted
+            for token in ("\u540c\u6642", "\u4e00\u8d77", "\u7d9c\u5408", "\u4e00\u8d77\u770b")
+        )
         has_fcf = any(
             keyword in lowered or keyword in query or keyword.lower().replace(" ", "") in compacted
             for keyword in self.FCF_KEYWORDS
@@ -911,9 +915,18 @@ class InputLayer:
             return "monthly_revenue_yoy_review"
         if has_pe_valuation and (
             has_fundamental_overview
-            or any(
-                token in query or token.lower().replace(" ", "") in compacted
-                for token in ("\u540c\u6642", "\u4e00\u8d77", "\u7d9c\u5408", "\u4e00\u8d77\u770b", "\u503c\u4e0d\u503c\u5f97", "\u6295\u8cc7")
+            or (
+                has_combined_fundamental_prompt
+                and any(
+                    (
+                        has_eps,
+                        has_monthly_revenue,
+                        has_dividend,
+                        has_fcf,
+                        has_revenue_growth,
+                        has_gross_margin,
+                    )
+                )
             )
         ):
             return "fundamental_pe_review"

@@ -1,5 +1,5 @@
 from llm_stock_system.core.interfaces import QueryHydrator, QueryLogStore
-from llm_stock_system.core.models import QueryRequest, QueryResponse, SourceResponse
+from llm_stock_system.core.models import HydrationResult, QueryRequest, QueryResponse, SourceResponse
 from llm_stock_system.layers.data_governance_layer import DataGovernanceLayer
 from llm_stock_system.layers.generation_layer import GenerationLayer
 from llm_stock_system.layers.input_layer import InputLayer
@@ -31,9 +31,12 @@ class QueryPipeline:
 
     def handle_query(self, request: QueryRequest) -> QueryResponse:
         structured_query = self._input_layer.parse(request)
+        hydration_result = HydrationResult()
         if self._query_hydrator is not None:
             try:
-                self._query_hydrator.hydrate(structured_query)
+                candidate_result = self._query_hydrator.hydrate(structured_query)
+                if isinstance(candidate_result, HydrationResult):
+                    hydration_result = candidate_result
             except Exception:
                 pass
         retrieved_documents = self._retrieval_layer.retrieve(structured_query)
@@ -43,6 +46,7 @@ class QueryPipeline:
             structured_query,
             governance_report,
             answer_draft,
+            hydration_result.facet_miss_list,
         )
         response = self._presentation_layer.present(
             answer_draft,
@@ -63,6 +67,3 @@ class QueryPipeline:
             except Exception:
                 pass
         return response
-
-    def get_sources(self, query_id: str) -> SourceResponse | None:
-        return self._query_log_store.get_sources(query_id)

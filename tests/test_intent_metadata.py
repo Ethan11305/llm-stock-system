@@ -97,5 +97,18 @@ class IntentMetadataTestCase(unittest.TestCase):
         self.assertIn("本益比", query.topic_tags)
 
 
+    def test_question_type_backfills_earnings_review_intent_and_facets(self) -> None:
+        query = StructuredQuery(
+            user_query="月營收年增率",
+            ticker="2330",
+            question_type="monthly_revenue_yoy_review",
+        )
+
+        self.assertEqual(query.intent, Intent.EARNINGS_REVIEW)
+        self.assertEqual(query.required_facets, {DataFacet.FINANCIAL_STATEMENTS})
+        self.assertIn(DataFacet.MONTHLY_REVENUE, query.preferred_facets)
+        self.assertIn(DataFacet.NEWS, query.preferred_facets)
+
+
 if __name__ == "__main__":
     unittest.main()

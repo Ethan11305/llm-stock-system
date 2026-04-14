@@ -1,9 +1,11 @@
 # Phase 2: QueryDataHydrator Refactoring
 ## From question_type-based to Intent + DataFacet-based Routing
 
-**Status**: Planning Phase  
+**Status**: Completed  
 **Target Release**: Post Phase 0+1 validation  
 **Estimated Effort**: 3-4 days (implementation + testing)  
+**Actual Effort**: 1 implementation pass + targeted regression coverage  
+**Date Completed**: April 14, 2026  
 **Risk Level**: Medium (affects data retrieval path, but no breaking API changes)
 
 ---
@@ -833,6 +835,6 @@ def hydrate(self, query: StructuredQuery) -> HydrationResult:
 **Author**: Claude (Cowork Agent)  
 **Date Created**: April 14, 2026  
 **Last Updated**: April 14, 2026  
-**Status**: Ready for Implementation  
+**Status**: Completed  
 
-**Next Step**: Begin Phase 2 implementation following checklist in Section 9.
+**Next Step**: Monitor `facet_miss_list` in downstream validation and query log reporting.

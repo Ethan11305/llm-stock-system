@@ -21,6 +21,7 @@ class ValidationLayer:
         query: StructuredQuery,
         governance_report: GovernanceReport,
         answer_draft: AnswerDraft,
+        facet_miss_list: list[str] | None = None,
     ) -> ValidationResult:
         evidence_score = min(len(governance_report.evidence) / 4, 1.0) * 0.30
         trust_score = governance_report.high_trust_ratio * 0.25
@@ -219,6 +220,7 @@ class ValidationLayer:
             confidence_light=light,
             validation_status=status,
             warnings=warnings,
+            facet_miss_list=list(facet_miss_list or []),
         )
 
     def _freshness_weight(self, status: FreshnessStatus) -> float:
@@ -233,4 +235,7 @@ class ValidationLayer:
             ConsistencyStatus.CONSISTENT: 1.0,
             ConsistencyStatus.MOSTLY_CONSISTENT: 0.75,
             ConsistencyStatus.CONFLICTING: 0.2,
+        }[status]
+nsistencyStatus.MOSTLY_CONSISTENT: 0.7,
+            ConsistencyStatus.CONFLICTING: 0.3,
         }[status]

@@ -5,6 +5,7 @@ from llm_stock_system.core.models import (
     AnswerDraft,
     Document,
     GovernanceReport,
+    HydrationResult,
     PriceBar,
     QueryResponse,
     StockInfo,
@@ -37,7 +38,7 @@ class QueryLogStore(Protocol):
 
 
 class QueryHydrator(Protocol):
-    def hydrate(self, query: StructuredQuery) -> None:
+    def hydrate(self, query: StructuredQuery) -> HydrationResult:
         ...
 
 

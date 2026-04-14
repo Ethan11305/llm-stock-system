@@ -1,5 +1,5 @@
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field as dataclass_field
 from datetime import datetime
 from uuid import uuid4
 
@@ -212,6 +212,15 @@ class StructuredQuery(BaseModel):
         return values
 
 
+@dataclass
+class HydrationResult:
+    query_id: str = dataclass_field(default_factory=lambda: str(uuid4()))
+    synced_facets: set[DataFacet] = dataclass_field(default_factory=set)
+    failed_facets: dict[DataFacet, str] = dataclass_field(default_factory=dict)
+    facet_miss_list: list[str] = dataclass_field(default_factory=list)
+    total_duration_ms: float = 0.0
+
+
 class Document(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid4()))
     ticker: str
@@ -372,6 +381,7 @@ class ValidationResult(BaseModel):
     confidence_light: ConfidenceLight
     validation_status: str
     warnings: list[str] = Field(default_factory=list)
+    facet_miss_list: list[str] = Field(default_factory=list)
 
 
 class DataStatus(BaseModel):
