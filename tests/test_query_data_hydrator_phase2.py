@@ -3,12 +3,21 @@ from unittest.mock import Mock
 import unittest
 
 from llm_stock_system.core.enums import (
+    ConfidenceLight,
     ConsistencyStatus,
     DataFacet,
     FreshnessStatus,
+    Intent,
     SufficiencyStatus,
 )
-from llm_stock_system.core.models import AnswerDraft, GovernanceReport, HydrationResult, QueryRequest, StructuredQuery
+from llm_stock_system.core.models import (
+    AnswerDraft,
+    GovernanceReport,
+    HydrationResult,
+    QueryRequest,
+    StructuredQuery,
+    ValidationResult,
+)
 from llm_stock_system.layers.presentation_layer import PresentationLayer
 from llm_stock_system.layers.validation_layer import ValidationLayer
 from llm_stock_system.orchestrator.pipeline import QueryPipeline
@@ -98,7 +107,32 @@ class CapturingQueryLogStore:
 class ReturningHydrator:
     def hydrate(self, query: StructuredQuery) -> HydrationResult:
         _ = query
-        return HydrationResult(facet_miss_list=["news"])
+        return HydrationResult(facet_miss_list=["news"], preferred_miss_list=["price_history"])
+
+
+class CapturingValidationLayer:
+    def __init__(self) -> None:
+        self.calls: list[tuple[list[str] | None, list[str] | None]] = []
+
+    def validate(
+        self,
+        query: StructuredQuery,
+        governance_report: GovernanceReport,
+        answer_draft: AnswerDraft,
+        facet_miss_list: list[str] | None = None,
+        preferred_miss_list: list[str] | None = None,
+    ) -> ValidationResult:
+        _ = query
+        _ = governance_report
+        _ = answer_draft
+        self.calls.append((facet_miss_list, preferred_miss_list))
+        return ValidationResult(
+            confidence_score=0.5,
+            confidence_light=ConfidenceLight.YELLOW,
+            validation_status="review",
+            warnings=[],
+            facet_miss_list=list(facet_miss_list or []),
+        )
 
 
 class QueryDataHydratorPhase2TestCase(unittest.TestCase):
@@ -109,6 +143,7 @@ class QueryDataHydratorPhase2TestCase(unittest.TestCase):
         self.assertEqual(result.synced_facets, set())
         self.assertEqual(result.failed_facets, {})
         self.assertEqual(result.facet_miss_list, [])
+        self.assertEqual(result.preferred_miss_list, [])
         self.assertEqual(result.total_duration_ms, 0.0)
 
     def test_news_digest_prefers_query_aware_news_sync(self) -> None:
@@ -145,6 +180,56 @@ class QueryDataHydratorPhase2TestCase(unittest.TestCase):
         start_date, end_date = hydrator._compute_facet_window(DataFacet.PRICE_HISTORY, query, today)
 
         self.assertEqual(start_date, today - timedelta(days=120))
+        self.assertEqual(end_date, today)
+
+    def test_technical_view_with_technical_tag_uses_180_day_price_window(self) -> None:
+        hydrator = QueryDataHydrator(build_gateway())
+        today = datetime.now(timezone.utc).date()
+        query = StructuredQuery(
+            user_query="technical view",
+            ticker="2330",
+            intent=Intent.TECHNICAL_VIEW,
+            topic_tags=["技術面"],
+            time_range_label="30d",
+            time_range_days=30,
+        )
+
+        start_date, end_date = hydrator._compute_facet_window(DataFacet.PRICE_HISTORY, query, today)
+
+        self.assertEqual(start_date, today - timedelta(days=180))
+        self.assertEqual(end_date, today)
+
+    def test_technical_view_with_season_line_and_chip_tags_uses_120_day_price_window(self) -> None:
+        hydrator = QueryDataHydrator(build_gateway())
+        today = datetime.now(timezone.utc).date()
+        query = StructuredQuery(
+            user_query="season line margin flow",
+            ticker="6669",
+            intent=Intent.TECHNICAL_VIEW,
+            topic_tags=["季線", "籌碼"],
+            time_range_label="30d",
+            time_range_days=30,
+        )
+
+        start_date, end_date = hydrator._compute_facet_window(DataFacet.PRICE_HISTORY, query, today)
+
+        self.assertEqual(start_date, today - timedelta(days=120))
+        self.assertEqual(end_date, today)
+
+    def test_legacy_technical_indicator_question_type_backfills_180_day_price_window(self) -> None:
+        hydrator = QueryDataHydrator(build_gateway())
+        today = datetime.now(timezone.utc).date()
+        query = StructuredQuery(
+            user_query="technical view",
+            ticker="2330",
+            question_type="technical_indicator_review",
+            time_range_label="30d",
+            time_range_days=30,
+        )
+
+        start_date, end_date = hydrator._compute_facet_window(DataFacet.PRICE_HISTORY, query, today)
+
+        self.assertEqual(start_date, today - timedelta(days=180))
         self.assertEqual(end_date, today)
 
     def test_financial_statement_window_uses_multi_year_history(self) -> None:
@@ -196,6 +281,63 @@ class QueryDataHydratorPhase2TestCase(unittest.TestCase):
         self.assertEqual(balance_start, date(today.year - 3, 1, 1))
         self.assertEqual(cash_flow_start, date(today.year - 3, 1, 1))
 
+    def test_financial_health_profitability_tags_use_three_year_news_window(self) -> None:
+        hydrator = QueryDataHydrator(build_gateway())
+        today = datetime.now(timezone.utc).date()
+        query = StructuredQuery(
+            user_query="profitability stability",
+            ticker="2454",
+            intent=Intent.FINANCIAL_HEALTH,
+            topic_tags=["獲利", "穩定性"],
+            time_range_label="30d",
+            time_range_days=30,
+        )
+
+        start_date, end_date = hydrator._compute_facet_window(DataFacet.NEWS, query, today)
+
+        self.assertEqual(start_date, date(today.year - 3, 1, 1))
+        self.assertEqual(end_date, today)
+
+    def test_financial_health_non_profitability_tags_keep_default_news_floor(self) -> None:
+        hydrator = QueryDataHydrator(build_gateway())
+        today = datetime.now(timezone.utc).date()
+        cases = [
+            ["毛利率"],
+            ["營收", "成長"],
+        ]
+
+        for topic_tags in cases:
+            with self.subTest(topic_tags=topic_tags):
+                query = StructuredQuery(
+                    user_query="financial health",
+                    ticker="2454",
+                    intent=Intent.FINANCIAL_HEALTH,
+                    topic_tags=topic_tags,
+                    time_range_label="14d",
+                    time_range_days=14,
+                )
+
+                start_date, end_date = hydrator._compute_facet_window(DataFacet.NEWS, query, today)
+
+                self.assertEqual(start_date, today - timedelta(days=30))
+                self.assertEqual(end_date, today)
+
+    def test_legacy_profitability_stability_question_type_backfills_three_year_news_window(self) -> None:
+        hydrator = QueryDataHydrator(build_gateway())
+        today = datetime.now(timezone.utc).date()
+        query = StructuredQuery(
+            user_query="profitability stability",
+            ticker="2454",
+            question_type="profitability_stability_review",
+            time_range_label="30d",
+            time_range_days=30,
+        )
+
+        start_date, end_date = hydrator._compute_facet_window(DataFacet.NEWS, query, today)
+
+        self.assertEqual(start_date, date(today.year - 3, 1, 1))
+        self.assertEqual(end_date, today)
+
     def test_auto_fetch_facets_do_not_need_date_windows(self) -> None:
         hydrator = QueryDataHydrator(build_gateway())
         today = datetime.now(timezone.utc).date()
@@ -241,6 +383,7 @@ class QueryDataHydratorPhase2TestCase(unittest.TestCase):
         result = hydrator.hydrate(query)
 
         self.assertEqual(result.facet_miss_list, [])
+        self.assertEqual(result.preferred_miss_list, ["margin_data"])
         self.assertIn(DataFacet.MARGIN_DATA, result.failed_facets)
         self.assertIn(DataFacet.PRICE_HISTORY, result.synced_facets)
 
@@ -339,6 +482,23 @@ class QueryDataHydratorPhase2TestCase(unittest.TestCase):
 
         self.assertIsNotNone(query_log_store.validation_result)
         self.assertEqual(query_log_store.validation_result.facet_miss_list, ["news"])
+
+    def test_pipeline_passes_preferred_miss_list_to_validation_layer(self) -> None:
+        validation_layer = CapturingValidationLayer()
+        pipeline = QueryPipeline(
+            input_layer=StubInputLayer(),
+            retrieval_layer=StubRetrievalLayer(),
+            data_governance_layer=StubGovernanceLayer(),
+            generation_layer=StubGenerationLayer(),
+            validation_layer=validation_layer,
+            presentation_layer=PresentationLayer(),
+            query_log_store=CapturingQueryLogStore(),
+            query_hydrator=ReturningHydrator(),
+        )
+
+        pipeline.handle_query(QueryRequest(query="show me market summary"))
+
+        self.assertEqual(validation_layer.calls, [(["news"], ["price_history"])])
 
 
 if __name__ == "__main__":

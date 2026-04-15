@@ -49,6 +49,40 @@ QUESTION_TYPE_TO_INTENT: dict[str, Intent] = {
     "announcement_summary": Intent.INVESTMENT_ASSESSMENT,
 }
 
+
+# Backward compatibility: when callers construct StructuredQuery with only
+# ``question_type`` (no controlled_tags / free_keywords), these fallback tags
+# are injected so Generation adapters can still route on topic_tags.
+QUESTION_TYPE_FALLBACK_TOPIC_TAGS: dict[str, tuple[str, ...]] = {
+    "theme_impact_review":              ("題材", "產業"),
+    "shipping_rate_impact_review":      ("航運", "SCFI"),
+    "electricity_cost_impact_review":   ("電價", "成本"),
+    "macro_yield_sentiment_review":     ("CPI", "殖利率"),
+    "guidance_reaction_review":         ("法說", "指引"),
+    "listing_revenue_review":           ("上市", "營收"),
+    "monthly_revenue_yoy_review":       ("月營收",),
+    "margin_turnaround_review":         ("毛利率", "轉正"),
+    "gross_margin_comparison_review":   ("毛利率", "比較"),
+    "pe_valuation_review":              ("本益比",),
+    "fundamental_pe_review":            ("基本面", "本益比"),
+    "price_range":                      ("股價區間",),
+    "price_outlook":                    ("股價", "展望"),
+    "dividend_yield_review":            ("股利", "殖利率"),
+    "ex_dividend_performance":          ("除息", "填息"),
+    "fcf_dividend_sustainability_review": ("股利", "現金流"),
+    "debt_dividend_safety_review":      ("股利", "負債"),
+    "profitability_stability_review":   ("獲利", "穩定性"),
+    "revenue_growth_review":            ("營收", "成長"),
+    "technical_indicator_review":       ("技術面",),
+    "season_line_margin_review":        ("季線", "籌碼"),
+    "earnings_summary":                 ("財報",),
+    "eps_dividend_review":              ("EPS", "股利"),
+    "investment_support":               ("投資評估", "基本面", "本益比"),
+    "risk_review":                      ("風險",),
+    "announcement_summary":             ("公告",),
+}
+
+
 @dataclass(frozen=True)
 class FacetSpec:
     required: frozenset[DataFacet]
@@ -193,18 +227,19 @@ class StructuredQuery(BaseModel):
 
         controlled_tags = list(values.get("controlled_tags") or [])
         free_keywords = list(values.get("free_keywords") or [])
+        fallback_tags = list(QUESTION_TYPE_FALLBACK_TOPIC_TAGS.get(question_type or "", ()))
         if controlled_tags or free_keywords:
             values["topic_tags"] = _dedupe_preserving_order(
                 [tag.value if isinstance(tag, TopicTag) else str(tag) for tag in controlled_tags]
                 + [str(keyword) for keyword in free_keywords]
             )
         elif "topic_tags" not in values:
-            values["topic_tags"] = []
+            values["topic_tags"] = fallback_tags
 
         if values.get("tag_source") in (None, ""):
             if controlled_tags:
                 values["tag_source"] = "matched"
-            elif free_keywords:
+            elif free_keywords or fallback_tags:
                 values["tag_source"] = "fallback"
             else:
                 values["tag_source"] = "empty"

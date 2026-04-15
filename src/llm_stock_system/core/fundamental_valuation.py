@@ -1,5 +1,6 @@
 import re
 
+from llm_stock_system.core.enums import Intent, TopicTag
 from llm_stock_system.core.models import GovernanceReport, StructuredQuery
 
 
@@ -26,6 +27,25 @@ _INVESTMENT_SUPPORT_TYPES = {"fundamental_pe_review", "investment_support"}
 
 
 def is_fundamental_valuation_question(query: StructuredQuery) -> bool:
+    topic_tags = set(query.topic_tags or [])
+
+    if query.intent == Intent.VALUATION_CHECK:
+        return {
+            TopicTag.FUNDAMENTAL.value,
+            TopicTag.VALUATION.value,
+        }.issubset(topic_tags)
+
+    if query.intent == Intent.INVESTMENT_ASSESSMENT:
+        if any(
+            tag in topic_tags
+            for tag in (
+                TopicTag.FUNDAMENTAL.value,
+                TopicTag.VALUATION.value,
+                "投資評估",
+            )
+        ):
+            return True
+
     return query.question_type in _INVESTMENT_SUPPORT_TYPES
 
 

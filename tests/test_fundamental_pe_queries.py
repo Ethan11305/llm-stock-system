@@ -158,4 +158,9 @@ class FundamentalPEQueryTestCase(unittest.TestCase):
 
         self.assertIn("基本面來看", draft.summary)
         self.assertIn("估值面來看", draft.summary)
-       
+        self.assertIn("基本面：", draft.highlights[0])
+        self.assertIn("本益比：", draft.highlights[1])
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -2,8 +2,8 @@ import unittest
 from datetime import datetime, timezone
 
 from llm_stock_system.adapters.postgres_market_data import FinMindPostgresGateway
-from llm_stock_system.core.enums import SourceTier, Topic
-from llm_stock_system.core.models import Document
+from llm_stock_system.core.enums import Intent, SourceTier, Topic
+from llm_stock_system.core.models import Document, StructuredQuery
 
 
 def make_document(
@@ -30,6 +30,14 @@ def make_document(
 class PostgresDocumentSortingTestCase(unittest.TestCase):
     def test_investment_support_prefers_pe_and_financial_documents(self) -> None:
         gateway = object.__new__(FinMindPostgresGateway)
+        query = StructuredQuery(
+            user_query="這檔值得投資嗎？",
+            ticker="2408",
+            company_name="南亞科",
+            intent=Intent.INVESTMENT_ASSESSMENT,
+            topic_tags=["基本面", "本益比"],
+        )
+        profile = gateway._resolve_retrieval_profile(query)
         docs = [
             make_document(
                 title="latest news",
@@ -61,7 +69,7 @@ class PostgresDocumentSortingTestCase(unittest.TestCase):
             ),
         ]
 
-        ordered = gateway._sorted(docs, question_type="investment_support")
+        ordered = gateway._sorted(docs, profile)
 
         self.assertEqual(len(ordered), 3)
         self.assertEqual(ordered[0].source_type, "pe_current")

@@ -1,7 +1,8 @@
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
-from llm_stock_system.core.enums import SourceTier, Topic
+from llm_stock_system.core.enums import Intent, SourceTier, Topic
+from llm_stock_system.core.fundamental_valuation import is_fundamental_valuation_question
 from llm_stock_system.core.interfaces import DocumentRepository, QueryLogStore
 from llm_stock_system.core.models import (
     Document,
@@ -31,7 +32,7 @@ class InMemoryDocumentRepository(DocumentRepository):
         now = datetime.now(timezone.utc)
         min_published_at = now - timedelta(days=query.time_range_days)
         target_tickers = {query.ticker}
-        if query.comparison_ticker and query.question_type in {"gross_margin_comparison_review", "theme_impact_review"}:
+        if self._should_include_comparison(query):
             target_tickers.add(query.comparison_ticker)
         candidates: list[tuple[int, Document]] = []
 
@@ -64,13 +65,13 @@ class InMemoryDocumentRepository(DocumentRepository):
             score += 4
         if query.topic in document.topics:
             score += 3
-        if query.question_type == "earnings_summary" and Topic.EARNINGS in document.topics:
+        if self._prefers_earnings_documents(query) and Topic.EARNINGS in document.topics:
             score += 2
-        if query.question_type == "announcement_summary" and Topic.ANNOUNCEMENT in document.topics:
+        if self._prefers_announcement_documents(query) and Topic.ANNOUNCEMENT in document.topics:
             score += 2
-        if query.question_type == "theme_impact_review" and document.ticker in {query.ticker, query.comparison_ticker}:
+        if self._is_theme_comparison_query(query) and document.ticker in {query.ticker, query.comparison_ticker}:
             score += 2
-        if query.question_type in {"investment_support", "fundamental_pe_review", "price_outlook", "price_range"}:
+        if self._prefers_valuation_documents(query):
             score += 1
         return score
 
@@ -80,6 +81,44 @@ class InMemoryDocumentRepository(DocumentRepository):
             SourceTier.MEDIUM: 2,
             SourceTier.LOW: 1,
         }[tier]
+
+    def _topic_tags(self, query: StructuredQuery) -> set[str]:
+        return set(query.topic_tags or [])
+
+    def _is_theme_comparison_query(self, query: StructuredQuery) -> bool:
+        tags = self._topic_tags(query)
+        return (
+            query.intent == Intent.NEWS_DIGEST
+            and bool(query.comparison_ticker)
+            and bool(tags & {"題材", "產業", "AI", "電動車", "半導體設備"})
+        )
+
+    def _is_gross_margin_comparison_query(self, query: StructuredQuery) -> bool:
+        tags = self._topic_tags(query)
+        return (
+            query.intent == Intent.FINANCIAL_HEALTH
+            and bool(query.comparison_ticker)
+            and "毛利率" in tags
+        )
+
+    def _should_include_comparison(self, query: StructuredQuery) -> bool:
+        return self._is_theme_comparison_query(query) or self._is_gross_margin_comparison_query(query)
+
+    def _prefers_earnings_documents(self, query: StructuredQuery) -> bool:
+        tags = self._topic_tags(query)
+        return query.topic == Topic.EARNINGS or "財報" in tags
+
+    def _prefers_announcement_documents(self, query: StructuredQuery) -> bool:
+        tags = self._topic_tags(query)
+        return query.topic == Topic.ANNOUNCEMENT or "公告" in tags
+
+    def _prefers_valuation_documents(self, query: StructuredQuery) -> bool:
+        tags = self._topic_tags(query)
+        return (
+            is_fundamental_valuation_question(query)
+            or "股價區間" in tags
+            or ("股價" in tags and "展望" in tags)
+        )
 
 
 class InMemoryQueryLogStore(QueryLogStore):

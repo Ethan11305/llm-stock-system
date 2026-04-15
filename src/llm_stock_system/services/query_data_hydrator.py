@@ -200,7 +200,7 @@ class QueryDataHydrator:
         history_years = max((query.time_range_days + 364) // 365, 2)
 
         if facet == DataFacet.PRICE_HISTORY:
-            baseline_days = 180 if query.question_type == "technical_indicator_review" else 120
+            baseline_days = 180 if self._is_technical_indicator_query(query) else 120
             return today - timedelta(days=max(query.time_range_days, baseline_days)), today
 
         if facet == DataFacet.FINANCIAL_STATEMENTS:
@@ -217,7 +217,7 @@ class QueryDataHydrator:
             return today - timedelta(days=180), today
 
         if facet == DataFacet.NEWS:
-            if query.question_type == "profitability_stability_review":
+            if self._is_profitability_stability_query(query):
                 return date(today.year - 3, 1, 1), today
             return today - timedelta(days=max(query.time_range_days, 30)), today
 
@@ -225,6 +225,17 @@ class QueryDataHydrator:
             return None
 
         return None
+
+    def _topic_tags(self, query: StructuredQuery) -> set[str]:
+        return set(query.topic_tags or [])
+
+    def _is_technical_indicator_query(self, query: StructuredQuery) -> bool:
+        tags = self._topic_tags(query)
+        return query.intent == Intent.TECHNICAL_VIEW and not bool(tags & {"季線", "籌碼"})
+
+    def _is_profitability_stability_query(self, query: StructuredQuery) -> bool:
+        tags = self._topic_tags(query)
+        return query.intent == Intent.FINANCIAL_HEALTH and bool(tags & {"獲利", "穩定性"})
 
     def schedule_follow_up(self, query: StructuredQuery, validation_result: ValidationResult) -> bool:
         if not self._should_schedule_follow_up(query, validation_result):
