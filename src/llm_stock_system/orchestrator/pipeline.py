@@ -47,6 +47,7 @@ class QueryPipeline:
             governance_report,
             answer_draft,
             hydration_result.facet_miss_list,
+            hydration_result.preferred_miss_list,
         )
         response = self._presentation_layer.present(
             answer_draft,

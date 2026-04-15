@@ -135,7 +135,10 @@ class FCFDividendSustainabilityTestCase(unittest.TestCase):
         )
 
         self.assertEqual(result.confidence_light, ConfidenceLight.RED)
-        self.assertIn("FCF dividend sustainability review requires both cash flow and dividend evidence.", result.warnings)
+        self.assertIn(
+            "FCF dividend sustainability review: missing one of cash flow or dividend evidence.",
+            result.warnings,
+        )
 
 
 if __name__ == "__main__":

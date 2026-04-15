@@ -112,6 +112,7 @@ class QueryDataHydrator:
         today = datetime.now(timezone.utc).date()
         started_at = time.perf_counter()
         required_facets = set(query.required_facets)
+        preferred_facets = set(query.preferred_facets)
 
         self._safe_call(getattr(self._gateway, "sync_stock_info", None))
         for ticker in self._iter_tickers(query):
@@ -124,6 +125,8 @@ class QueryDataHydrator:
                 result.failed_facets.setdefault(facet, self._format_exception(facet_result.exception))
                 if facet in required_facets and facet.value not in result.facet_miss_list:
                     result.facet_miss_list.append(facet.value)
+                elif facet in preferred_facets and facet.value not in result.preferred_miss_list:
+                    result.preferred_miss_list.append(facet.value)
 
         result.total_duration_ms = (time.perf_counter() - started_at) * 1000
         return result
@@ -318,4 +321,3 @@ class QueryDataHydrator:
             with self._warmup_lock:
                 self._active_follow_up_tickers.discard(ticker)
                 self._last_follow_up_at[ticker] = datetime.now(timezone.utc)
-    

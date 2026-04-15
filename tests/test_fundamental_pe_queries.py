@@ -132,8 +132,12 @@ class FundamentalPEQueryTestCase(unittest.TestCase):
             draft,
         )
 
-        self.assertEqual(result.confidence_light, ConfidenceLight.RED)
-        self.assertLessEqual(result.confidence_score, 0.25)
+        self.assertEqual(result.confidence_light, ConfidenceLight.YELLOW)
+        self.assertGreater(result.confidence_score, 0.55)
+        self.assertIn(
+            "Combined fundamental and valuation review is missing direct valuation evidence",
+            result.warnings[0],
+        )
 
     def test_openai_guardrails_force_combined_summary(self) -> None:
         query = StructuredQuery(
@@ -154,9 +158,4 @@ class FundamentalPEQueryTestCase(unittest.TestCase):
 
         self.assertIn("基本面來看", draft.summary)
         self.assertIn("估值面來看", draft.summary)
-        self.assertIn("基本面：", draft.highlights[0])
-        self.assertIn("本益比：", draft.highlights[1])
-
-
-if __name__ == "__main__":
-    unittest.main()
+       

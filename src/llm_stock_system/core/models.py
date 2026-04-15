@@ -218,6 +218,7 @@ class HydrationResult:
     synced_facets: set[DataFacet] = dataclass_field(default_factory=set)
     failed_facets: dict[DataFacet, str] = dataclass_field(default_factory=dict)
     facet_miss_list: list[str] = dataclass_field(default_factory=list)
+    preferred_miss_list: list[str] = dataclass_field(default_factory=list)
     total_duration_ms: float = 0.0
 
 

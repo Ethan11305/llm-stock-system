@@ -92,6 +92,16 @@ class OpenAIPreliminaryAnswerTestCase(unittest.TestCase):
 
         self.assertEqual(result.confidence_light, ConfidenceLight.RED)
         self.assertLessEqual(result.confidence_score, 0.35)
+        self.assertIn(
+            "Preliminary LLM answer returned without grounded local evidence.",
+            result.warnings,
+        )
+
+    def test_is_preliminary_summary_recognizes_chinese_prefix(self) -> None:
+        validation = ValidationLayer(min_green_confidence=0.8, min_yellow_confidence=0.55)
+        self.assertTrue(validation._is_preliminary_summary("初步判讀：2330 近期資訊偏中性。"))
+        self.assertTrue(validation._is_preliminary_summary("preliminary low-confidence answer"))
+        self.assertFalse(validation._is_preliminary_summary("台積電近期表現穩定。"))
 
     def test_preliminary_falls_back_to_local_non_blank_answer_when_openai_fails(self) -> None:
         query = StructuredQuery(

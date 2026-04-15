@@ -95,7 +95,27 @@ class InputLayer:
     }
 
     PRICE_RANGE_KEYWORDS = ("\u6700\u9ad8\u9ede", "\u6700\u4f4e\u9ede", "\u6700\u9ad8\u50f9", "\u6700\u4f4e\u50f9", "\u5340\u9593", "range")
-    PRICE_OUTLOOK_KEYWORDS = ("\u6f32\u8dcc\u9810\u6e2c", "\u6703\u6f32\u55ce", "\u6703\u8dcc\u55ce", "\u8d70\u52e2", "\u9810\u6e2c", "\u76ee\u6a19\u50f9")
+    PRICE_OUTLOOK_KEYWORDS = (
+        "漲跌預測",
+        "會漲嗎",
+        "會跌嗎",
+        "走勢",
+        "預測",
+        "目標價",
+        # directional continuation patterns
+        "繼續漲",
+        "繼續跌",
+        "續漲",
+        "續跌",
+        "會不會漲",
+        "會不會跌",
+        "還會漲",
+        "還會跌",
+        "還能漲",
+        "還能跌",
+        "上漲空間",
+        "下跌空間",
+    )
     FUNDAMENTAL_OVERVIEW_KEYWORDS = (
         "\u57fa\u672c\u9762",
         "\u9ad4\u8cea",
