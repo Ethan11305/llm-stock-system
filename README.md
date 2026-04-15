@@ -74,12 +74,16 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 ```
 
-2. Upgrade pip and install the package in editable mode.
+2. Upgrade pip and install the package with development dependencies.
 
 ```powershell
 python -m pip install --upgrade pip
-pip install -e .
+pip install -e ".[dev]"
 ```
+
+> **Note:** `pip install -e .` installs only the runtime dependencies.
+> The `[dev]` extra adds `pytest` so the test suite can run.
+> Use the plain form only when deploying to production.
 
 3. Copy the environment template.
 
@@ -304,13 +308,19 @@ Invoke-RestMethod http://127.0.0.1:8000/api/sources/<query_id>
 
 ## Testing
 
-Run the test suite with:
+Make sure the development dependencies are installed first (see Quick Start step 2):
+
+```powershell
+pip install -e ".[dev]"
+```
+
+Run the full test suite:
 
 ```powershell
 pytest
 ```
 
-If you only want to run a single test module:
+Run a single test module:
 
 ```powershell
 pytest tests/test_pipeline.py
