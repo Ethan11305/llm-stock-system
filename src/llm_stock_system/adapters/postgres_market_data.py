@@ -1,4 +1,6 @@
-﻿from collections import defaultdict
+from collections import defaultdict
+from collections.abc import Mapping
+from dataclasses import dataclass, field as dataclass_field
 from datetime import date, datetime, time, timedelta, timezone
 import re
 from uuid import NAMESPACE_URL, uuid5
@@ -8,7 +10,7 @@ from sqlalchemy import create_engine, text
 from llm_stock_system.adapters.finmind import FinMindClient
 from llm_stock_system.adapters.news_pipeline import MultiSourceNewsPipeline
 from llm_stock_system.adapters.twse_financial import TwseCompanyFinancialClient
-from llm_stock_system.core.enums import SourceTier, Topic
+from llm_stock_system.core.enums import Intent, SourceTier, Topic
 from llm_stock_system.core.interfaces import DocumentRepository, StockResolver
 from llm_stock_system.core.models import (
     DividendPolicy,
@@ -21,6 +23,263 @@ from llm_stock_system.core.models import (
     StructuredQuery,
     ValuationPoint,
 )
+
+
+_SORT_PRIORITY_DEFAULT: dict[str, int] = {}
+_SORT_PRIORITY_FUNDAMENTAL: dict[str, int] = {
+    "pe_current": 4,
+    "pe_history": 4,
+    "pe_assessment": 4,
+    "financial_statement": 3,
+    "financial_statement_breakdown": 3,
+    "financial_statement_latest": 3,
+    "dividend_policy": 2,
+    "dividend_analysis": 2,
+    "news_article": 1,
+}
+_SORT_PRIORITY_PRICE_OUTLOOK: dict[str, int] = {
+    "market_data": 3,
+    "technical_indicator": 3,
+    "news_article": 1,
+}
+
+
+@dataclass(frozen=True)
+class RetrievalProfile:
+    key: str
+    builder_plan: tuple[str, ...]
+    sort_priority: Mapping[str, int] = dataclass_field(default_factory=dict)
+    news_search_term_seeds: tuple[str, ...] = ()
+    search_term_strategy: str = "static"
+    include_comparison: bool = False
+    append_primary_label: bool = False
+
+
+RETRIEVAL_PROFILES: dict[str, RetrievalProfile] = {
+    "news_shipping": RetrievalProfile(
+        key="news_shipping",
+        builder_plan=("_build_shipping_rate_impact_documents",),
+        sort_priority=_SORT_PRIORITY_DEFAULT,
+        news_search_term_seeds=(
+            "紅海",
+            "紅海航線",
+            "SCFI",
+            "運價",
+            "運價指數",
+            "貨櫃",
+            "航運",
+            "塞港",
+            "繞道",
+            "目標價",
+            "分析師",
+            "法人",
+            "外資",
+            "評等",
+            "上修",
+            "下修",
+        ),
+        include_comparison=True,
+        append_primary_label=True,
+    ),
+    "news_electricity": RetrievalProfile(
+        key="news_electricity",
+        builder_plan=("_build_electricity_cost_impact_documents",),
+        sort_priority=_SORT_PRIORITY_DEFAULT,
+        news_search_term_seeds=(
+            "工業電價",
+            "電價",
+            "調漲",
+            "漲價",
+            "電費",
+            "用電大戶",
+            "成本",
+            "節能",
+            "轉嫁",
+            "因應對策",
+        ),
+        include_comparison=True,
+        append_primary_label=True,
+    ),
+    "news_macro": RetrievalProfile(
+        key="news_macro",
+        builder_plan=("_build_macro_yield_sentiment_documents",),
+        sort_priority=_SORT_PRIORITY_DEFAULT,
+        news_search_term_seeds=(
+            "CPI",
+            "通膨",
+            "高殖利率",
+            "殖利率",
+            "金控",
+            "金控股",
+            "法人",
+            "外資",
+            "觀點",
+            "防禦",
+            "美債",
+            "利率",
+        ),
+        append_primary_label=True,
+    ),
+    "news_guidance": RetrievalProfile(
+        key="news_guidance",
+        builder_plan=("_build_guidance_reaction_documents",),
+        sort_priority=_SORT_PRIORITY_DEFAULT,
+        news_search_term_seeds=(
+            "法說",
+            "法說會",
+            "營運指引",
+            "下半年",
+            "展望",
+            "財測",
+            "法人",
+            "外資",
+            "目標價",
+            "評等",
+            "正面",
+            "負面",
+        ),
+    ),
+    "news_listing": RetrievalProfile(
+        key="news_listing",
+        builder_plan=("_build_listing_revenue_documents",),
+        sort_priority=_SORT_PRIORITY_DEFAULT,
+        news_search_term_seeds=(
+            "上市",
+            "掛牌",
+            "IPO",
+            "蜜月行情",
+            "承銷",
+            "股價波動",
+            "營收",
+            "月增",
+            "年增",
+        ),
+    ),
+    "news_theme": RetrievalProfile(
+        key="news_theme",
+        builder_plan=("_build_theme_impact_documents",),
+        sort_priority=_SORT_PRIORITY_DEFAULT,
+        search_term_strategy="theme",
+        include_comparison=True,
+    ),
+    "news_generic": RetrievalProfile(
+        key="news_generic",
+        builder_plan=("_build_market_documents",),
+        sort_priority=_SORT_PRIORITY_DEFAULT,
+        search_term_strategy="generic_news",
+    ),
+    "earnings_monthly_revenue": RetrievalProfile(
+        key="earnings_monthly_revenue",
+        builder_plan=("_build_monthly_revenue_yoy_documents",),
+        sort_priority=_SORT_PRIORITY_DEFAULT,
+        news_search_term_seeds=("營收", "月增", "年增", "成長", "展望"),
+    ),
+    "earnings_margin_turnaround": RetrievalProfile(
+        key="earnings_margin_turnaround",
+        builder_plan=("_build_margin_turnaround_documents",),
+        sort_priority=_SORT_PRIORITY_DEFAULT,
+    ),
+    "earnings_eps_dividend": RetrievalProfile(
+        key="earnings_eps_dividend",
+        builder_plan=("_build_fundamental_documents",),
+        sort_priority=_SORT_PRIORITY_DEFAULT,
+    ),
+    "earnings_fundamental": RetrievalProfile(
+        key="earnings_fundamental",
+        builder_plan=("_build_fundamental_documents",),
+        sort_priority=_SORT_PRIORITY_DEFAULT,
+    ),
+    "valuation_price_range": RetrievalProfile(
+        key="valuation_price_range",
+        builder_plan=("_build_price_documents",),
+        sort_priority=_SORT_PRIORITY_DEFAULT,
+    ),
+    "valuation_price_outlook": RetrievalProfile(
+        key="valuation_price_outlook",
+        builder_plan=("_build_price_documents", "_build_market_documents"),
+        sort_priority=_SORT_PRIORITY_PRICE_OUTLOOK,
+    ),
+    "valuation_fundamental": RetrievalProfile(
+        key="valuation_fundamental",
+        builder_plan=(
+            "_build_fundamental_documents",
+            "_build_pe_valuation_documents",
+            "_build_market_documents",
+        ),
+        sort_priority=_SORT_PRIORITY_FUNDAMENTAL,
+    ),
+    "valuation_pe_only": RetrievalProfile(
+        key="valuation_pe_only",
+        builder_plan=("_build_pe_valuation_documents",),
+        sort_priority=_SORT_PRIORITY_DEFAULT,
+    ),
+    "dividend_ex": RetrievalProfile(
+        key="dividend_ex",
+        builder_plan=("_build_ex_dividend_documents",),
+        sort_priority=_SORT_PRIORITY_DEFAULT,
+    ),
+    "dividend_fcf": RetrievalProfile(
+        key="dividend_fcf",
+        builder_plan=("_build_fcf_dividend_sustainability_documents",),
+        sort_priority=_SORT_PRIORITY_DEFAULT,
+    ),
+    "dividend_debt": RetrievalProfile(
+        key="dividend_debt",
+        builder_plan=("_build_debt_dividend_safety_documents",),
+        sort_priority=_SORT_PRIORITY_DEFAULT,
+    ),
+    "dividend_yield": RetrievalProfile(
+        key="dividend_yield",
+        builder_plan=("_build_dividend_yield_documents",),
+        sort_priority=_SORT_PRIORITY_DEFAULT,
+    ),
+    "health_gross_margin_cmp": RetrievalProfile(
+        key="health_gross_margin_cmp",
+        builder_plan=("_build_gross_margin_comparison_documents",),
+        sort_priority=_SORT_PRIORITY_DEFAULT,
+    ),
+    "health_profitability": RetrievalProfile(
+        key="health_profitability",
+        builder_plan=("_build_profitability_stability_documents",),
+        sort_priority=_SORT_PRIORITY_DEFAULT,
+    ),
+    "health_revenue_growth": RetrievalProfile(
+        key="health_revenue_growth",
+        builder_plan=("_build_revenue_growth_documents",),
+        sort_priority=_SORT_PRIORITY_DEFAULT,
+        news_search_term_seeds=("營收", "月增", "年增", "成長", "展望", "AI", "AI伺服器", "占比"),
+    ),
+    "technical_margin_flow": RetrievalProfile(
+        key="technical_margin_flow",
+        builder_plan=("_build_season_line_margin_documents",),
+        sort_priority=_SORT_PRIORITY_DEFAULT,
+    ),
+    "technical_indicators": RetrievalProfile(
+        key="technical_indicators",
+        builder_plan=("_build_technical_indicator_documents",),
+        sort_priority=_SORT_PRIORITY_DEFAULT,
+    ),
+    "investment_announcement": RetrievalProfile(
+        key="investment_announcement",
+        builder_plan=("_build_announcement_documents",),
+        sort_priority=_SORT_PRIORITY_DEFAULT,
+        search_term_strategy="generic_news",
+    ),
+    "investment_support": RetrievalProfile(
+        key="investment_support",
+        builder_plan=(
+            "_build_fundamental_documents",
+            "_build_pe_valuation_documents",
+            "_build_market_documents",
+        ),
+        sort_priority=_SORT_PRIORITY_FUNDAMENTAL,
+    ),
+    "investment_risk": RetrievalProfile(
+        key="investment_risk",
+        builder_plan=("_build_market_documents",),
+        sort_priority=_SORT_PRIORITY_DEFAULT,
+    ),
+}
 
 
 class FinMindPostgresGateway:
@@ -383,10 +642,15 @@ class FinMindPostgresGateway:
         if not query.ticker:
             return 0
 
+        profile = self._resolve_retrieval_profile(query)
         today = datetime.now(timezone.utc).date()
         start_date = today - timedelta(days=max(query.time_range_days, 30))
         sync_plan = [(query.ticker, query.company_name)]
-        if query.comparison_ticker and query.comparison_ticker not in {query.ticker}:
+        if (
+            profile.include_comparison
+            and query.comparison_ticker
+            and query.comparison_ticker not in {query.ticker}
+        ):
             sync_plan.append((query.comparison_ticker, query.comparison_company_name))
 
         total_rows = 0
@@ -673,61 +937,11 @@ class FinMindPostgresGateway:
     def build_documents(self, query: StructuredQuery) -> list[Document]:
         if not query.ticker:
             return []
-        if query.question_type == "price_range":
-            return self._build_price_documents(query)
-        if query.question_type == "guidance_reaction_review":
-            return self._build_guidance_reaction_documents(query)
-        if query.question_type == "shipping_rate_impact_review":
-            return self._build_shipping_rate_impact_documents(query)
-        if query.question_type == "electricity_cost_impact_review":
-            return self._build_electricity_cost_impact_documents(query)
-        if query.question_type == "macro_yield_sentiment_review":
-            return self._build_macro_yield_sentiment_documents(query)
-        if query.question_type == "listing_revenue_review":
-            return self._build_listing_revenue_documents(query)
-        if query.question_type == "monthly_revenue_yoy_review":
-            return self._build_monthly_revenue_yoy_documents(query)
-        if query.question_type == "margin_turnaround_review":
-            return self._build_margin_turnaround_documents(query)
-        if query.question_type == "gross_margin_comparison_review":
-            return self._build_gross_margin_comparison_documents(query)
-        if query.question_type == "profitability_stability_review":
-            return self._build_profitability_stability_documents(query)
-        if query.question_type == "debt_dividend_safety_review":
-            return self._build_debt_dividend_safety_documents(query)
-        if query.question_type == "fcf_dividend_sustainability_review":
-            return self._build_fcf_dividend_sustainability_documents(query)
-        if query.question_type == "pe_valuation_review":
-            return self._build_pe_valuation_documents(query)
-        if query.question_type in {"fundamental_pe_review", "investment_support"}:
-            return self._sorted(
-                self._build_fundamental_documents(query)
-                + self._build_pe_valuation_documents(query)
-                + self._build_market_documents(query),
-                question_type=query.question_type,
-            )
-        if query.question_type == "technical_indicator_review":
-            return self._build_technical_indicator_documents(query)
-        if query.question_type == "revenue_growth_review":
-            return self._build_revenue_growth_documents(query)
-        if query.question_type == "theme_impact_review":
-            return self._build_theme_impact_documents(query)
-        if query.question_type == "season_line_margin_review":
-            return self._build_season_line_margin_documents(query)
-        if query.question_type == "price_outlook":
-            return self._sorted(
-                self._build_price_documents(query) + self._build_market_documents(query),
-                question_type=query.question_type,
-            )
-        if query.question_type == "dividend_yield_review":
-            return self._build_dividend_yield_documents(query)
-        if query.question_type == "ex_dividend_performance":
-            return self._build_ex_dividend_documents(query)
-        if query.question_type in {"earnings_summary", "eps_dividend_review"} or query.topic == Topic.EARNINGS:
-            return self._build_fundamental_documents(query)
-        if query.question_type == "announcement_summary" or query.topic == Topic.ANNOUNCEMENT:
-            return self._build_announcement_documents(query)
-        return self._build_market_documents(query)
+        profile = self._resolve_retrieval_profile(query)
+        documents: list[Document] = []
+        for builder_name in profile.builder_plan:
+            documents.extend(getattr(self, builder_name)(query))
+        return self._sorted(documents, profile)
 
     def _build_price_documents(self, query: StructuredQuery) -> list[Document]:
         end_date = datetime.now(timezone.utc).date()
@@ -2874,6 +3088,34 @@ class FinMindPostgresGateway:
                 unique_keywords.append(keyword)
         return tuple(unique_keywords)
 
+    def _generic_news_tokens(self, query_text: str) -> tuple[str, ...]:
+        search_terms: list[str] = []
+        if any(token in query_text for token in ("公告", "法說", "董事會", "股利", "除息", "財報")):
+            search_terms.extend(("公告", "法說", "董事會", "股利", "除息", "財報"))
+        if any(token in query_text for token in ("處分", "土地", "資產", "業外", "入帳")):
+            search_terms.extend(("處分", "土地", "資產", "業外", "EPS", "入帳"))
+        if any(token in query_text for token in ("利空", "情緒", "不如預期", "下修", "觀望")):
+            search_terms.extend(("利空", "情緒", "不如預期", "下修", "觀望"))
+        return self._dedupe_terms(search_terms)
+
+    def _dedupe_terms(self, search_terms: list[str], limit: int = 10) -> tuple[str, ...]:
+        unique_terms: list[str] = []
+        for term in search_terms:
+            if term and term not in unique_terms:
+                unique_terms.append(term)
+        return tuple(unique_terms[:limit])
+
+    def _finalize_terms(
+        self,
+        search_terms: list[str],
+        pinned_terms: list[str] | None = None,
+        limit: int = 10,
+    ) -> tuple[str, ...]:
+        pinned = list(self._dedupe_terms(pinned_terms or [], limit=limit))
+        slots = max(limit - len(pinned), 0)
+        base_terms = [term for term in search_terms if term not in pinned]
+        return tuple(list(self._dedupe_terms(base_terms, limit=slots)) + pinned)
+
     def _build_eps_breakdown(self, label: str, items: list[FinancialStatementItem]) -> str:
         ordered = sorted(items, key=lambda item: item.statement_date)
         parts = [f"{item.statement_date:%Y-%m-%d} EPS {item.value:.2f} \u5143" for item in ordered]
@@ -2970,125 +3212,27 @@ class FinMindPostgresGateway:
         query: StructuredQuery,
         label: str | None,
     ) -> tuple[str, ...]:
-        user_query = query.user_query
+        profile = self._resolve_retrieval_profile(query)
         search_terms: list[str] = []
-        if query.question_type == "theme_impact_review":
+        if profile.search_term_strategy == "theme":
             search_terms.extend(
                 self._extract_theme_keywords(
-                    user_query,
+                    query.user_query,
                     label,
                     query.comparison_company_name,
                 )
             )
-        if query.question_type == "shipping_rate_impact_review":
-            search_terms.extend(
-                (
-                    "紅海",
-                    "紅海航線",
-                    "SCFI",
-                    "運價",
-                    "運價指數",
-                    "貨櫃",
-                    "航運",
-                    "塞港",
-                    "繞道",
-                    "目標價",
-                    "分析師",
-                    "法人",
-                    "外資",
-                    "評等",
-                    "上修",
-                    "下修",
-                )
-            )
-            if label:
-                search_terms.append(label)
-            if query.comparison_company_name:
-                search_terms.append(query.comparison_company_name)
-        if query.question_type == "electricity_cost_impact_review":
-            search_terms.extend(
-                (
-                    "工業電價",
-                    "電價",
-                    "調漲",
-                    "漲價",
-                    "電費",
-                    "用電大戶",
-                    "成本",
-                    "節能",
-                    "轉嫁",
-                    "因應對策",
-                )
-            )
-            if label:
-                search_terms.append(label)
-            if query.comparison_company_name:
-                search_terms.append(query.comparison_company_name)
-        if query.question_type == "macro_yield_sentiment_review":
-            search_terms.extend(
-                (
-                    "CPI",
-                    "通膨",
-                    "高殖利率",
-                    "殖利率",
-                    "金控",
-                    "金控股",
-                    "法人",
-                    "外資",
-                    "觀點",
-                    "防禦",
-                    "美債",
-                    "利率",
-                )
-            )
-            if label:
-                search_terms.append(label)
-        if query.question_type == "revenue_growth_review":
-            search_terms.extend(("營收", "月增", "年增", "成長", "展望", "AI", "AI伺服器", "占比"))
-        if query.question_type == "guidance_reaction_review":
-            search_terms.extend(
-                (
-                    "法說",
-                    "法說會",
-                    "營運指引",
-                    "下半年",
-                    "展望",
-                    "財測",
-                    "法人",
-                    "外資",
-                    "目標價",
-                    "評等",
-                    "正面",
-                    "負面",
-                )
-            )
-        if query.question_type == "listing_revenue_review":
-            search_terms.extend(
-                (
-                    "上市",
-                    "掛牌",
-                    "IPO",
-                    "蜜月行情",
-                    "承銷",
-                    "股價波動",
-                    "營收",
-                    "月增",
-                    "年增",
-                )
-            )
-        if query.question_type in {"announcement_summary", "market_summary"}:
-            if any(token in user_query for token in ("公告", "法說", "董事會", "股利", "除息", "財報")):
-                search_terms.extend(("公告", "法說", "董事會", "股利", "除息", "財報"))
-            if any(token in user_query for token in ("處分", "土地", "資產", "業外", "入帳")):
-                search_terms.extend(("處分", "土地", "資產", "業外", "EPS", "入帳"))
-            if any(token in user_query for token in ("利空", "情緒", "不如預期", "下修", "觀望")):
-                search_terms.extend(("利空", "情緒", "不如預期", "下修", "觀望"))
-
-        unique_terms: list[str] = []
-        for term in search_terms:
-            if term and term not in unique_terms:
-                unique_terms.append(term)
-        return tuple(unique_terms[:10])
+        elif profile.search_term_strategy == "generic_news":
+            search_terms.extend(self._generic_news_tokens(query.user_query))
+        else:
+            search_terms.extend(profile.news_search_term_seeds)
+            pinned_terms: list[str] = []
+            if profile.append_primary_label and label:
+                pinned_terms.append(label)
+            if profile.include_comparison and query.comparison_company_name:
+                pinned_terms.append(query.comparison_company_name)
+            return self._finalize_terms(search_terms, pinned_terms)
+        return self._dedupe_terms(search_terms)
 
     def _build_shipping_rate_support_excerpt(
         self,
@@ -3456,52 +3600,114 @@ class FinMindPostgresGateway:
     def _sorted(
         self,
         documents: list[Document],
-        question_type: str | None = None,
+        profile: RetrievalProfile | None = None,
     ) -> list[Document]:
         deduped: dict[tuple[str, str], Document] = {}
         for document in documents:
             dedupe_key = (document.url, document.source_type)
             existing = deduped.get(dedupe_key)
-            if existing is None or self._sort_key(document, question_type) > self._sort_key(
+            if existing is None or self._sort_key(document, profile) > self._sort_key(
                 existing,
-                question_type,
+                profile,
             ):
                 deduped[dedupe_key] = document
 
         ordered = list(deduped.values())
-        ordered.sort(key=lambda item: self._sort_key(item, question_type), reverse=True)
+        ordered.sort(key=lambda item: self._sort_key(item, profile), reverse=True)
         return ordered
 
-    def _sort_key(self, document: Document, question_type: str | None) -> tuple[int, int, datetime]:
+    def _sort_key(
+        self,
+        document: Document,
+        profile: RetrievalProfile | None,
+    ) -> tuple[int, int, datetime]:
         return (
-            self._document_priority(document, question_type),
+            self._document_priority(document, profile),
             self._tier_rank(document.source_tier),
             document.published_at,
         )
 
-    def _document_priority(self, document: Document, question_type: str | None) -> int:
-        if question_type in {"fundamental_pe_review", "investment_support"}:
-            if document.source_type in {"pe_current", "pe_history", "pe_assessment"}:
-                return 4
-            if document.source_type in {
-                "financial_statement",
-                "financial_statement_breakdown",
-                "financial_statement_latest",
-            }:
-                return 3
-            if document.source_type in {"dividend_policy", "dividend_analysis"}:
-                return 2
-            if document.source_type == "news_article":
-                return 1
-        if question_type == "price_outlook":
-            if document.source_type in {"market_data", "technical_indicator"}:
-                return 3
-            if document.source_type == "news_article":
-                return 1
-        return 0
+    def _document_priority(self, document: Document, profile: RetrievalProfile | None) -> int:
+        if profile is None:
+            return 0
+        return profile.sort_priority.get(document.source_type, 0)
 
     def _tier_rank(self, tier: SourceTier) -> int:
         return {SourceTier.HIGH: 3, SourceTier.MEDIUM: 2, SourceTier.LOW: 1}[tier]
+
+    def _resolve_retrieval_profile(self, query: StructuredQuery) -> RetrievalProfile:
+        tags = set(query.topic_tags or [])
+        user_query = query.user_query or ""
+        intent = query.intent
+
+        if intent == Intent.NEWS_DIGEST:
+            if tags & {"航運", "SCFI"}:
+                return RETRIEVAL_PROFILES["news_shipping"]
+            if tags & {"電價", "成本"}:
+                return RETRIEVAL_PROFILES["news_electricity"]
+            if tags & {"總經", "CPI", "殖利率"}:
+                return RETRIEVAL_PROFILES["news_macro"]
+            if tags & {"題材", "產業", "AI", "電動車", "半導體設備"}:
+                return RETRIEVAL_PROFILES["news_theme"]
+            if tags & {"法說", "指引"}:
+                return RETRIEVAL_PROFILES["news_guidance"]
+            if "上市" in tags:
+                return RETRIEVAL_PROFILES["news_listing"]
+            if query.topic == Topic.EARNINGS:
+                return RETRIEVAL_PROFILES["earnings_fundamental"]
+            if query.topic == Topic.ANNOUNCEMENT:
+                return RETRIEVAL_PROFILES["investment_announcement"]
+            return RETRIEVAL_PROFILES["news_generic"]
+
+        if intent == Intent.EARNINGS_REVIEW:
+            if "月營收" in tags:
+                return RETRIEVAL_PROFILES["earnings_monthly_revenue"]
+            if "毛利率" in tags and ("轉正" in tags or "轉正" in user_query):
+                return RETRIEVAL_PROFILES["earnings_margin_turnaround"]
+            if tags & {"EPS", "股利"}:
+                return RETRIEVAL_PROFILES["earnings_eps_dividend"]
+            return RETRIEVAL_PROFILES["earnings_fundamental"]
+
+        if intent == Intent.VALUATION_CHECK:
+            if "股價區間" in tags:
+                return RETRIEVAL_PROFILES["valuation_price_range"]
+            if tags & {"股價", "展望"}:
+                return RETRIEVAL_PROFILES["valuation_price_outlook"]
+            if "基本面" in tags and "本益比" in tags:
+                return RETRIEVAL_PROFILES["valuation_fundamental"]
+            return RETRIEVAL_PROFILES["valuation_pe_only"]
+
+        if intent == Intent.DIVIDEND_ANALYSIS:
+            if tags & {"除息", "填息"}:
+                return RETRIEVAL_PROFILES["dividend_ex"]
+            if "現金流" in tags:
+                return RETRIEVAL_PROFILES["dividend_fcf"]
+            if "負債" in tags:
+                return RETRIEVAL_PROFILES["dividend_debt"]
+            return RETRIEVAL_PROFILES["dividend_yield"]
+
+        if intent == Intent.FINANCIAL_HEALTH:
+            if "毛利率" in tags and query.comparison_ticker:
+                return RETRIEVAL_PROFILES["health_gross_margin_cmp"]
+            if tags & {"獲利", "穩定性"}:
+                return RETRIEVAL_PROFILES["health_profitability"]
+            return RETRIEVAL_PROFILES["health_revenue_growth"]
+
+        if intent == Intent.TECHNICAL_VIEW:
+            if tags & {"季線", "籌碼"}:
+                return RETRIEVAL_PROFILES["technical_margin_flow"]
+            return RETRIEVAL_PROFILES["technical_indicators"]
+
+        if intent == Intent.INVESTMENT_ASSESSMENT:
+            if "公告" in tags or query.topic == Topic.ANNOUNCEMENT:
+                return RETRIEVAL_PROFILES["investment_announcement"]
+            if "基本面" in tags and "本益比" in tags:
+                return RETRIEVAL_PROFILES["investment_support"]
+            if "風險" in tags:
+                return RETRIEVAL_PROFILES["investment_risk"]
+            return RETRIEVAL_PROFILES["investment_support"]
+
+        return RETRIEVAL_PROFILES["news_generic"]
 
     def _calculate_rsi(self, closes: list[float], period: int = 14) -> float | None:
         if len(closes) < period + 1:
@@ -4382,11 +4588,11 @@ class FinMindPostgresGateway:
             item,
             (
                 "eps",
-                "\u57fa\u672c\u6bcf\u80a1\u76c8\u9918",
-                "\u6bcf\u80a1\u76c8\u9918",
-                "\u57fa\u672c\u6bcf\u80a1\u76c8\u9918\uff08\u5143\uff09",
-                "\u57fa\u672c\u6bcf\u80a1\u76c8\u9918(\u5143)",
-                "\u7a00\u91cb\u6bcf\u80a1\u76c8\u9918",
+                "基本每股盈餘",
+                "每股盈餘",
+                "基本每股盈餘（元）",
+                "基本每股盈餘(元)",
+                "稀釋每股盈餘",
             ),
         )
 
@@ -4418,27 +4624,27 @@ class FinMindPostgresGateway:
             return SourceTier.LOW
         if any(token in lowered for token in ("mops", "twse", "tpex", "company", "corp", "official")):
             return SourceTier.HIGH
-        if any(token in source_name for token in ("\u516c\u958b\u8cc7\u8a0a\u89c0\u6e2c\u7ad9", "\u8b49\u4ea4\u6240", "\u516c\u53f8\u6295\u8cc7\u4eba\u95dc\u4fc2", "\u9255\u4ea8", "\u8c50\u96f2")):
+        if any(token in source_name for token in ("公開資訊觀測站", "證交所", "公司投資人關係", "鉅亨", "豐雲")):
             return SourceTier.HIGH
         return SourceTier.MEDIUM
 
     def _infer_news_topics(self, article: NewsArticle) -> list[Topic]:
         content = f"{article.title} {article.summary or ''}"
         topics = [Topic.NEWS]
-        if any(token in content for token in ("\u80a1\u5229", "\u914d\u606f", "\u9664\u606f", "\u516c\u544a", "\u8463\u4e8b\u6703")):
+        if any(token in content for token in ("股利", "配息", "除息", "公告", "董事會")):
             topics.append(Topic.ANNOUNCEMENT)
-        if any(token in content for token in ("\u8ca1\u5831", "\u6cd5\u8aaa", "EPS", "\u71df\u6536", "\u7372\u5229")):
+        if any(token in content for token in ("財報", "法說", "EPS", "營收", "獲利")):
             topics.append(Topic.EARNINGS)
         return topics
 
     def _describe_market_reaction(self, close_price: float, reference_price: float, close_fill_ratio: float) -> str:
         if close_price >= reference_price and close_fill_ratio >= 100:
-            return "\u5f37\u52c1"
+            return "強勁"
         if close_price >= reference_price and close_fill_ratio >= 50:
-            return "\u6b63\u5411"
+            return "正向"
         if close_price >= reference_price:
-            return "\u4e2d\u6027"
-        return "\u504f\u5f31"
+            return "中性"
+        return "偏弱"
 
 
 class PostgresStockResolver(StockResolver):
