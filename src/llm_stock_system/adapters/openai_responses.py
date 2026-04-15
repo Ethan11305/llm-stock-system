@@ -3,6 +3,7 @@ import json
 import httpx
 
 from llm_stock_system.adapters.llm import RuleBasedSynthesisClient
+from llm_stock_system.core.enums import Intent
 from llm_stock_system.core.fundamental_valuation import (
     build_fundamental_valuation_facts,
     build_fundamental_valuation_highlights,
@@ -25,6 +26,53 @@ from llm_stock_system.core.target_price import (
 
 
 class OpenAIResponsesSynthesisClient(LLMClient):
+    """LLM-backed synthesizer.
+
+    Phase 4: user prompt routes on ``intent`` + ``topic_tags``; ``question_type``
+    is no longer included in any prompt sent to the LLM.
+    """
+
+    _INTENT_INSTRUCTIONS: dict[Intent, list[str]] = {
+        Intent.NEWS_DIGEST: [
+            "Focus: summarize the market sentiment and key event triggers from the evidence.",
+            "If topic tags include '航運', emphasize freight-rate signals and analyst target-price reactions.",
+            "If topic tags include '電價', emphasize electricity cost pressure and company response measures.",
+            "If topic tags include '總經', emphasize macro indicators (CPI, yield) and institutional views.",
+            "If topic tags include '法說', summarize positive and negative interpretations of the guidance.",
+            "If topic tags include '上市', connect revenue data with post-listing price movement.",
+        ],
+        Intent.EARNINGS_REVIEW: [
+            "Focus: summarize earnings quality, trend, and momentum from the financial evidence.",
+            "If topic tags include '月營收', highlight MoM and YoY revenue change and whether it hit a recent high.",
+            "If topic tags include '毛利率', explicitly address whether gross margin has turned positive and whether operating income followed.",
+        ],
+        Intent.VALUATION_CHECK: [
+            "Focus: assess current valuation relative to historical range and peers.",
+            "State the current PE ratio and its historical percentile position when evidence is available.",
+            "If topic tags include '基本面', combine valuation with fundamental quality indicators.",
+            "For forward price questions, anchor to analyst target prices or price-level evidence and do not fabricate numbers.",
+        ],
+        Intent.DIVIDEND_ANALYSIS: [
+            "Focus: assess dividend yield, payout sustainability, and coverage ratios.",
+            "If topic tags include '現金流', address whether free cash flow covers dividend payments over the past few years.",
+            "If topic tags include '負債', address debt ratio trend and cash balance coverage of dividend obligations.",
+        ],
+        Intent.FINANCIAL_HEALTH: [
+            "Focus: assess profitability stability, margin structure, and revenue growth.",
+            "If a comparison ticker is present, compare the companies side by side using the most recent comparable period.",
+            "Mention any loss years in the past 5 years and their likely cause if the evidence supports it.",
+        ],
+        Intent.TECHNICAL_VIEW: [
+            "Focus: summarize price position relative to moving averages and key technical indicators.",
+            "If topic tags include '籌碼', include margin balance and utilization rate alongside price data.",
+            "Report RSI14, KD, MACD trend, and Bollinger position if available in the evidence.",
+        ],
+        Intent.INVESTMENT_ASSESSMENT: [
+            "Focus: provide a balanced investment thesis combining fundamentals, valuation, and risk factors.",
+            "Include at least three distinct risk reminders.",
+            "If evidence covers both fundamental and valuation data, integrate both in the summary.",
+        ],
+    }
     def __init__(
         self,
         api_key: str,
@@ -74,30 +122,7 @@ class OpenAIResponsesSynthesisClient(LLMClient):
             for item in governance_report.evidence
         ]
 
-        user_prompt = "\n".join(
-            [
-                f"User query: {query.user_query}",
-                f"Ticker: {query.ticker or 'unknown'}",
-                f"Company: {query.company_name or 'unknown'}",
-                f"Comparison ticker: {query.comparison_ticker or 'none'}",
-                f"Comparison company: {query.comparison_company_name or 'none'}",
-                f"Topic: {query.topic.value}",
-                f"Question type: {query.question_type}",
-                "Evidence:",
-                "\n".join(evidence_lines),
-                "",
-                "Return exactly one JSON object with these keys:",
-                "summary, highlights, facts, impacts, risks",
-                "Rules:",
-                "- Use only the evidence provided above.",
-                "- If evidence is insufficient, say: 資料不足，無法確認。",
-                "- Respond in Traditional Chinese.",
-                "- Use Traditional Chinese characters only; avoid Simplified Chinese wording.",
-                "- Use Traditional Chinese characters only; avoid Simplified Chinese wording.",
-                "- highlights, facts, impacts, risks must be arrays of short strings.",
-                "- Do not include markdown fences.",
-            ]
-        )
+        user_prompt = self._build_grounded_user_prompt(query, evidence_lines)
 
         try:
             response_json = self._request(self._build_payload(system_prompt, user_prompt))
@@ -137,26 +162,7 @@ class OpenAIResponsesSynthesisClient(LLMClient):
                 "- Respond in Traditional Chinese.",
             ]
         )
-        user_prompt = "\n".join(
-            [
-                f"User query: {query.user_query}",
-                f"Ticker: {query.ticker or 'unknown'}",
-                f"Company: {query.company_name or 'unknown'}",
-                f"Comparison ticker: {query.comparison_ticker or 'none'}",
-                f"Comparison company: {query.comparison_company_name or 'none'}",
-                f"Topic: {query.topic.value}",
-                f"Question type: {query.question_type}",
-                "",
-                "Return exactly one JSON object with these keys:",
-                "summary, highlights, facts, impacts, risks",
-                "Rules:",
-                "- This is a preliminary answer because no local evidence was retrieved.",
-                "- Do not claim that the answer is verified.",
-                "- Avoid exact figures unless they are essential and you are highly confident.",
-                "- highlights, facts, impacts, risks must be arrays of short strings.",
-                "- Do not include markdown fences.",
-            ]
-        )
+        user_prompt = self._build_preliminary_user_prompt(query)
 
         try:
             response_json = self._request(self._build_payload(preliminary_system_prompt, user_prompt))
@@ -183,6 +189,64 @@ class OpenAIResponsesSynthesisClient(LLMClient):
             ],
             sources=[],
         )
+
+    # ------------------------------------------------------------------ #
+    # Prompt builders                                                      #
+    # ------------------------------------------------------------------ #
+
+    def _build_grounded_user_prompt(self, query: StructuredQuery, evidence_lines: list[str]) -> str:
+        return "\n".join(
+            [
+                *self._build_query_context_lines(query),
+                "Evidence:",
+                "\n".join(evidence_lines),
+                "",
+                "Return exactly one JSON object with these keys:",
+                "summary, highlights, facts, impacts, risks",
+                "Rules:",
+                "- Use only the evidence provided above.",
+                "- If evidence is insufficient, say: 資料不足，無法確認。",
+                "- Respond in Traditional Chinese.",
+                "- Use Traditional Chinese characters only; avoid Simplified Chinese wording.",
+                "- highlights, facts, impacts, risks must be arrays of short strings.",
+                "- Do not include markdown fences.",
+            ]
+        )
+
+    def _build_preliminary_user_prompt(self, query: StructuredQuery) -> str:
+        return "\n".join(
+            [
+                *self._build_query_context_lines(query),
+                "",
+                "Return exactly one JSON object with these keys:",
+                "summary, highlights, facts, impacts, risks",
+                "Rules:",
+                "- This is a preliminary answer because no local evidence was retrieved.",
+                "- Do not claim that the answer is verified.",
+                "- Avoid exact figures unless they are essential and you are highly confident.",
+                "- highlights, facts, impacts, risks must be arrays of short strings.",
+                "- Do not include markdown fences.",
+            ]
+        )
+
+    def _build_query_context_lines(self, query: StructuredQuery) -> list[str]:
+        topic_tags = ", ".join(query.topic_tags) if query.topic_tags else "none"
+        lines = [
+            f"User query: {query.user_query}",
+            f"Ticker: {query.ticker or 'unknown'}",
+            f"Company: {query.company_name or 'unknown'}",
+            f"Comparison ticker: {query.comparison_ticker or 'none'}",
+            f"Comparison company: {query.comparison_company_name or 'none'}",
+            f"Intent: {query.intent.value}",
+            f"Topic tags: {topic_tags}",
+        ]
+        lines.extend(self._build_intent_instructions(query))
+        return lines
+
+    def _build_intent_instructions(self, query: StructuredQuery) -> list[str]:
+        base = self._INTENT_INSTRUCTIONS.get(query.intent, [])
+        tag_hint = f"Active topic tags: {', '.join(query.topic_tags)}" if query.topic_tags else ""
+        return [line for line in ([tag_hint] + base) if line]
 
     def _build_local_preliminary_fallback(self, query: StructuredQuery) -> AnswerDraft:
         label = query.company_name or query.ticker or "此標的"
@@ -270,7 +334,7 @@ class OpenAIResponsesSynthesisClient(LLMClient):
         governance_report: GovernanceReport,
         parsed: dict,
     ) -> dict:
-        if query.question_type != "price_outlook" or not is_forward_price_question(query):
+        if query.intent != Intent.VALUATION_CHECK or not is_forward_price_question(query):
             return parsed
 
         guarded = dict(parsed)

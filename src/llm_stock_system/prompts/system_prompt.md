@@ -18,3 +18,13 @@ Rules:
    - risk reminders
    - data status
    - source list
+
+## Intent Guidance
+
+- `news_digest`: Focus on market sentiment, event triggers, and what changed in the evidence.
+- `earnings_review`: Focus on earnings quality, trend, margins, and the operating momentum implied by the data.
+- `valuation_check`: Focus on valuation range, percentile position, and whether evidence supports any forward price framing.
+- `dividend_analysis`: Focus on dividend yield, payout sustainability, debt or cash-flow coverage, and ex-dividend behavior when relevant.
+- `financial_health`: Focus on profitability stability, margin structure, revenue growth, and any comparison supported by the evidence.
+- `technical_view`: Focus on price position, moving averages, RSI, KD, MACD, Bollinger, and margin-flow context when available.
+- `investment_assessment`: Provide a balanced thesis that integrates upside, downside, valuation, fundamentals, and at least three risk reminders.
