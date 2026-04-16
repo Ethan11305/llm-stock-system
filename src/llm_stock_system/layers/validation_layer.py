@@ -394,13 +394,13 @@ class ValidationLayer:
     def _freshness_weight(self, status: FreshnessStatus) -> float:
         return {
             FreshnessStatus.RECENT: 1.0,
-            FreshnessStatus.STALE: 0.6,
-            FreshnessStatus.OUTDATED: 0.2,
-        }[status]
+            FreshnessStatus.STALE: 0.5,
+            FreshnessStatus.OUTDATED: 0.1,
+        }.get(status, 0.0)
 
     def _consistency_weight(self, status: ConsistencyStatus) -> float:
         return {
             ConsistencyStatus.CONSISTENT: 1.0,
-            ConsistencyStatus.MOSTLY_CONSISTENT: 0.75,
+            ConsistencyStatus.MOSTLY_CONSISTENT: 0.6,
             ConsistencyStatus.CONFLICTING: 0.2,
-        }[status]
+        }.get(status, 0.0)
