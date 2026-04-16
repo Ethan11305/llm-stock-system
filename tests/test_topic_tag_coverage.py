@@ -25,6 +25,16 @@ class TopicTagCoverageTestCase(unittest.TestCase):
         self.assertIn(TopicTag.SEMICON_EQUIP, query.controlled_tags)
         self.assertIn("ASML", query.free_keywords)
 
+    def test_comparison_query_keeps_fallback_tag_alongside_matched_tags(self) -> None:
+        query = self.input_layer.parse(
+            QueryRequest(query="我想比較長榮 (2603) 跟陽明 (2609)，這兩家公司誰的毛利率比較高？這代表哪一家的經營效率比較好？")
+        )
+
+        self.assertIn(TopicTag.GROSS_MARGIN, query.controlled_tags)
+        self.assertIn("毛利率", query.topic_tags)
+        self.assertIn("比較", query.topic_tags)
+        self.assertEqual(query.tag_source, "matched")
+
     def test_investment_support_query_falls_back_to_free_keywords(self) -> None:
         query = self.input_layer.parse(QueryRequest(query="台積電 2330 可以買嗎？"))
 

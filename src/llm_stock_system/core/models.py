@@ -232,6 +232,7 @@ class StructuredQuery(BaseModel):
             values["topic_tags"] = _dedupe_preserving_order(
                 [tag.value if isinstance(tag, TopicTag) else str(tag) for tag in controlled_tags]
                 + [str(keyword) for keyword in free_keywords]
+                + fallback_tags
             )
         elif "topic_tags" not in values:
             values["topic_tags"] = fallback_tags

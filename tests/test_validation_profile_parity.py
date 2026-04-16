@@ -1,14 +1,23 @@
+"""Behaviour tests for ValidationProfile — one profile per question_type scenario.
+
+PR2/PR3 migration note: the legacy _apply_*_rules() methods have been removed.
+This file now tests the profile-based evaluation path exclusively.
+Each subTest asserts that _evaluate_profile() produces the expected score.
+"""
+
 from datetime import datetime, timezone
 import unittest
 
 from llm_stock_system.core.enums import ConsistencyStatus, FreshnessStatus, SourceTier, SufficiencyStatus
 from llm_stock_system.core.models import AnswerDraft, Evidence, GovernanceReport, SourceCitation, StructuredQuery
-from llm_stock_system.core.target_price import is_forward_price_question
 from llm_stock_system.core.validation_profiles import get_profile
 from llm_stock_system.layers.validation_layer import ValidationLayer
 
 
 UTC_NOW = datetime(2026, 4, 16, tzinfo=timezone.utc)
+
+# Partial-revenue tokens (previously a ValidationLayer class constant, now inline)
+_PARTIAL_REVENUE_TOKEN = "部分月份"
 
 
 def build_query(question_type: str, **overrides) -> StructuredQuery:
@@ -115,31 +124,25 @@ class ValidationProfileParityTestCase(unittest.TestCase):
             with self.subTest(question_type=question_type, scenario=scenario):
                 query, governance_report, answer_draft = self._build_case(question_type, scenario)
                 profile = get_profile(query.intent)
-                self.assertIsNotNone(profile)
+                self.assertIsNotNone(profile, f"No profile registered for intent of {question_type!r}")
 
-                legacy_warnings: list[str] = []
-                profile_warnings: list[str] = []
-
-                legacy_score = self._run_legacy(
-                    question_type,
-                    query,
-                    governance_report,
-                    answer_draft,
-                    1.0,
-                    legacy_warnings,
-                )
+                warnings: list[str] = []
                 profile_score = self.validation._evaluate_profile(
                     profile,
                     query,
                     governance_report,
                     answer_draft,
                     1.0,
-                    profile_warnings,
+                    warnings,
                 )
 
-                self.assertEqual(legacy_score, expected_score)
-                self.assertEqual(profile_score, expected_score)
-                self.assertEqual(profile_score, legacy_score)
+                self.assertEqual(
+                    profile_score,
+                    expected_score,
+                    f"Profile score mismatch for {question_type}/{scenario}: "
+                    f"got {profile_score}, expected {expected_score}. "
+                    f"Warnings: {warnings}",
+                )
 
     def _build_case(
         self,
@@ -165,7 +168,7 @@ class ValidationProfileParityTestCase(unittest.TestCase):
             evidence = [build_evidence("TWSE monthly revenue", "Revenue snapshot", "monthly revenue year over year improved")]
             summary = "Monthly revenue review."
             if scenario == "degraded":
-                summary = f"Monthly revenue review. {self.validation._PARTIAL_MONTHLY_REVENUE_TOKENS[0]}"
+                summary = f"Monthly revenue review. {_PARTIAL_REVENUE_TOKEN}"
             return self._case_from_evidence(question_type, evidence, summary)
 
         if question_type == "pe_valuation_review":
@@ -311,85 +314,6 @@ class ValidationProfileParityTestCase(unittest.TestCase):
     ) -> tuple[StructuredQuery, GovernanceReport, AnswerDraft]:
         query = build_query(question_type)
         return query, build_governance_report(evidence), build_answer_draft(summary, evidence)
-
-    def _run_legacy(
-        self,
-        question_type: str,
-        query: StructuredQuery,
-        governance_report: GovernanceReport,
-        answer_draft: AnswerDraft,
-        confidence_score: float,
-        warnings: list[str],
-    ) -> float:
-        source_names = self.validation._source_names(governance_report)
-        combined_text = self.validation._combined_text(governance_report)
-        normalized_text = combined_text.lower()
-
-        if question_type == "price_outlook":
-            if is_forward_price_question(query):
-                return self.validation._apply_price_outlook_rules(
-                    query,
-                    governance_report,
-                    confidence_score,
-                    warnings,
-                )
-            return self.validation._apply_directional_price_rules(
-                query,
-                governance_report,
-                confidence_score,
-                warnings,
-            )
-        if question_type == "ex_dividend_performance":
-            return self.validation._apply_ex_dividend_rules(source_names, confidence_score, warnings)
-        if question_type == "technical_indicator_review":
-            return self.validation._apply_technical_indicator_rules(source_names, confidence_score, warnings)
-        if question_type == "monthly_revenue_yoy_review":
-            return self.validation._apply_monthly_revenue_rules(
-                source_names,
-                answer_draft,
-                confidence_score,
-                warnings,
-            )
-        if question_type == "pe_valuation_review":
-            return self.validation._apply_pe_valuation_rules(source_names, confidence_score, warnings)
-        if question_type == "profitability_stability_review":
-            return self.validation._apply_profitability_stability_rules(
-                governance_report,
-                source_names,
-                combined_text,
-                confidence_score,
-                warnings,
-            )
-        if question_type == "margin_turnaround_review":
-            return self.validation._apply_margin_turnaround_rules(
-                governance_report,
-                source_names,
-                combined_text,
-                confidence_score,
-                warnings,
-            )
-        if question_type in {"fundamental_pe_review", "investment_support"}:
-            return self.validation._apply_fundamental_valuation_rules(
-                governance_report,
-                confidence_score,
-                warnings,
-            )
-        if question_type == "season_line_margin_review":
-            return self.validation._apply_season_line_margin_rules(source_names, confidence_score, warnings)
-        if question_type == "fcf_dividend_sustainability_review":
-            return self.validation._apply_fcf_dividend_rules(source_names, confidence_score, warnings)
-        if question_type == "debt_dividend_safety_review":
-            return self.validation._apply_debt_dividend_rules(source_names, confidence_score, warnings)
-        if question_type == "gross_margin_comparison_review":
-            return self.validation._apply_gross_margin_comparison_rules(
-                query,
-                governance_report,
-                source_names,
-                normalized_text,
-                confidence_score,
-                warnings,
-            )
-        raise ValueError(f"Unsupported legacy parity branch: {question_type}")
 
 
 if __name__ == "__main__":

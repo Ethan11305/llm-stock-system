@@ -22,7 +22,7 @@ class RuleBasedSynthesisClient(LLMClient):
 
     Phase 4 routing:
     - Primary router: ``query.intent``  (7 Intent values)
-    - Secondary router: ``query.topic_tags`` (controlled_tags + free_keywords merged)
+    - Secondary router: ``query.topic_tags`` (matched tags, free keywords, and fallback tags merged)
     - ``question_type`` is no longer read anywhere in this class.
     """
 
