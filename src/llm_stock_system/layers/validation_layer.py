@@ -9,6 +9,7 @@ from llm_stock_system.core.target_price import (
     is_forward_price_question,
     is_target_price_question,
 )
+from llm_stock_system.core.validation_profiles import ConditionKind, ValidationProfile, ValidationRule
 
 
 class ValidationLayer:
@@ -154,6 +155,147 @@ class ValidationLayer:
         penalty = min(len(preferred_misses) * 0.10, 0.30)
         warnings.append(f"Preferred facets not synced ({len(preferred_misses)}): {preferred_misses}")
         return max(confidence_score - penalty, 0.0)
+
+    def _evaluate_profile(
+        self,
+        profile: ValidationProfile,
+        query: StructuredQuery,
+        governance_report: GovernanceReport,
+        answer_draft: AnswerDraft,
+        confidence_score: float,
+        warnings: list[str],
+    ) -> float:
+        """Evaluate a declarative validation profile without changing call flow.
+
+        PR1 keeps the legacy ``_apply_question_type_rules()`` path in production.
+        This evaluator exists so we can add direct tests and dual-run parity checks
+        before switching runtime behavior in a later PR.
+        """
+        source_names = self._source_names(governance_report)
+        normalized_text = self._combined_text(governance_report).lower()
+
+        for rule in profile.rules:
+            confidence_score = self._apply_profile_rule(
+                rule,
+                query,
+                governance_report,
+                answer_draft,
+                source_names,
+                normalized_text,
+                confidence_score,
+                warnings,
+            )
+
+        if profile.custom_validator is not None:
+            confidence_score = profile.custom_validator(
+                query,
+                governance_report,
+                answer_draft,
+                confidence_score,
+                warnings,
+            )
+
+        return confidence_score
+
+    def _apply_profile_rule(
+        self,
+        rule: ValidationRule,
+        query: StructuredQuery,
+        governance_report: GovernanceReport,
+        answer_draft: AnswerDraft,
+        source_names: set[str],
+        normalized_text: str,
+        confidence_score: float,
+        warnings: list[str],
+    ) -> float:
+        if rule.condition == ConditionKind.DUAL_SIGNAL_MISSING:
+            return self._apply_dual_signal_rule(rule, source_names, confidence_score, warnings)
+
+        if not self._is_profile_rule_triggered(
+            rule,
+            query,
+            governance_report,
+            answer_draft,
+            source_names,
+            normalized_text,
+        ):
+            return confidence_score
+
+        if rule.warning:
+            warnings.append(rule.warning)
+        if rule.cap is not None:
+            confidence_score = min(confidence_score, rule.cap)
+        if rule.penalty is not None:
+            confidence_score = max(confidence_score - rule.penalty, 0.0)
+        return confidence_score
+
+    def _is_profile_rule_triggered(
+        self,
+        rule: ValidationRule,
+        query: StructuredQuery,
+        governance_report: GovernanceReport,
+        answer_draft: AnswerDraft,
+        source_names: set[str],
+        normalized_text: str,
+    ) -> bool:
+        if rule.condition == ConditionKind.SOURCE_FRAGMENT_MISSING:
+            fragments = tuple(rule.params.get("fragments", ()))
+            return not self._has_source_fragment(source_names, *fragments)
+
+        if rule.condition == ConditionKind.CONTENT_KEYWORD_MISSING:
+            keywords = [str(keyword).lower() for keyword in rule.params.get("keywords", ())]
+            match_mode = str(rule.params.get("match_mode", "any")).lower()
+            if match_mode == "all":
+                return any(keyword not in normalized_text for keyword in keywords)
+            return not any(keyword in normalized_text for keyword in keywords)
+
+        if rule.condition == ConditionKind.EVIDENCE_COUNT_BELOW:
+            threshold = int(rule.params.get("threshold", 0))
+            return len(governance_report.evidence) < threshold
+
+        if rule.condition == ConditionKind.COMPARISON_COMPANY_MISSING:
+            if not query.comparison_ticker:
+                return False
+            primary_label = (query.company_name or query.ticker or "").lower()
+            comparison_label = (query.comparison_company_name or query.comparison_ticker or "").lower()
+            if not (primary_label and comparison_label):
+                return False
+            return primary_label not in normalized_text or comparison_label not in normalized_text
+
+        if rule.condition == ConditionKind.ANSWER_CONTAINS_TOKEN:
+            summary = answer_draft.summary.lower()
+            tokens = [str(token).lower() for token in rule.params.get("tokens", ())]
+            return any(token in summary for token in tokens)
+
+        raise ValueError(f"Unsupported condition kind: {rule.condition}")
+
+    def _apply_dual_signal_rule(
+        self,
+        rule: ValidationRule,
+        source_names: set[str],
+        confidence_score: float,
+        warnings: list[str],
+    ) -> float:
+        signal_a_fragments = tuple(rule.params.get("signal_a_fragments", ()))
+        signal_b_fragments = tuple(rule.params.get("signal_b_fragments", ()))
+        has_signal_a = self._has_source_fragment(source_names, *signal_a_fragments)
+        has_signal_b = self._has_source_fragment(source_names, *signal_b_fragments)
+
+        if has_signal_a and has_signal_b:
+            return confidence_score
+
+        if not has_signal_a and not has_signal_b:
+            warning = str(rule.params.get("both_missing_warning", "")).strip()
+            cap = rule.params.get("both_missing_cap")
+        else:
+            warning = str(rule.params.get("one_missing_warning", "")).strip()
+            cap = rule.params.get("one_missing_cap")
+
+        if warning:
+            warnings.append(warning)
+        if cap is not None:
+            confidence_score = min(confidence_score, float(cap))
+        return confidence_score
 
     def _apply_question_type_rules(
         self,
