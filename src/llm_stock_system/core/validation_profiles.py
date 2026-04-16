@@ -177,6 +177,18 @@ def _validate_price_outlook(
         is_target_price_question,
     )
 
+    # --- Forecast queries are governed by the ForecastBlock-based caps in
+    # ValidationLayer._apply_forecast_cap, so skip the legacy directional
+    # cap logic that would otherwise double-penalise them. ---
+    if getattr(query, "is_forecast_query", False):
+        # Still warn, but do NOT cap here — the forecast mode cap handles it.
+        if governance_report.evidence:
+            warnings.append(
+                "Forecast query: direction/range assessment delegated to "
+                "ForecastBlock mode-based confidence cap."
+            )
+        return confidence_score
+
     if not is_forward_price_question(query):
         if has_forward_price_context(query, governance_report):
             warnings.append(

@@ -1,5 +1,5 @@
-from llm_stock_system.core.enums import ConfidenceLight, ConsistencyStatus, FreshnessStatus, StanceBias
-from llm_stock_system.core.models import AnswerDraft, GovernanceReport, StructuredQuery, ValidationResult
+from llm_stock_system.core.enums import ConfidenceLight, ConsistencyStatus, ForecastMode, FreshnessStatus, StanceBias
+from llm_stock_system.core.models import AnswerDraft, ForecastBlock, GovernanceReport, StructuredQuery, ValidationResult
 from llm_stock_system.core.validation_profiles import ConditionKind, ValidationProfile, ValidationRule, get_profile
 
 
@@ -10,6 +10,14 @@ class ValidationLayer:
     def __init__(self, min_green_confidence: float, min_yellow_confidence: float) -> None:
         self._min_green_confidence = min_green_confidence
         self._min_yellow_confidence = min_yellow_confidence
+
+    # Forecast-specific confidence caps — forecast answers must never look
+    # as confident as grounded historical answers.
+    _FORECAST_MODE_CAPS: dict[ForecastMode, float] = {
+        ForecastMode.SCENARIO_ESTIMATE: 0.65,
+        ForecastMode.HISTORICAL_PROXY: 0.45,
+        ForecastMode.UNSUPPORTED: 0.25,
+    }
 
     def validate(
         self,
@@ -25,6 +33,12 @@ class ValidationLayer:
         confidence_score = self._apply_general_checks(
             query,
             governance_report,
+            answer_draft,
+            confidence_score,
+            warnings,
+        )
+        confidence_score = self._apply_forecast_cap(
+            query,
             answer_draft,
             confidence_score,
             warnings,
@@ -106,6 +120,39 @@ class ValidationLayer:
         if any(token in summary for token in self._INSUFFICIENT_DATA_TOKENS):
             warnings.append("Answer indicates insufficient data.")
             confidence_score = min(confidence_score, 0.25)
+
+        return confidence_score
+
+    def _apply_forecast_cap(
+        self,
+        query: StructuredQuery,
+        answer_draft: AnswerDraft,
+        confidence_score: float,
+        warnings: list[str],
+    ) -> float:
+        """Apply forecast-specific confidence ceiling.
+
+        scenario_estimate ≤ 0.65 (never green),
+        historical_proxy  ≤ 0.45,
+        unsupported       ≤ 0.25.
+        """
+        if not query.is_forecast_query:
+            return confidence_score
+
+        forecast = answer_draft.forecast
+        if forecast is None:
+            return confidence_score
+
+        cap = self._FORECAST_MODE_CAPS.get(forecast.mode)
+        if cap is not None and confidence_score > cap:
+            confidence_score = cap
+
+        if forecast.mode == ForecastMode.SCENARIO_ESTIMATE:
+            warnings.append("此回答為情境推估，信心上限不超過 0.65。")
+        elif forecast.mode == ForecastMode.HISTORICAL_PROXY:
+            warnings.append("僅以歷史波動代理，信心上限不超過 0.45。")
+        elif forecast.mode == ForecastMode.UNSUPPORTED:
+            warnings.append("缺乏前瞻依據，信心上限不超過 0.25。")
 
         return confidence_score
 

@@ -17,6 +17,11 @@ from llm_stock_system.core.models import (
     SourceCitation,
     StructuredQuery,
 )
+from llm_stock_system.core.forecast import (
+    apply_forecast_guardrail,
+    apply_forecast_guardrail_to_list,
+    build_forecast_block,
+)
 from llm_stock_system.core.target_price import (
     build_forward_price_fact,
     build_forward_price_highlight,
@@ -96,9 +101,17 @@ class OpenAIResponsesSynthesisClient(LLMClient):
             if self._preliminary_answers_enabled:
                 preliminary_draft = self._synthesize_preliminary(query, system_prompt)
                 if preliminary_draft is not None:
+                    if query.is_forecast_query and preliminary_draft.forecast is None:
+                        preliminary_draft.forecast = build_forecast_block(query, governance_report)
                     return preliminary_draft
-                return self._build_local_preliminary_fallback(query)
-            return self._fallback_client.synthesize(query, governance_report, system_prompt)
+                fallback = self._build_local_preliminary_fallback(query)
+                if query.is_forecast_query:
+                    fallback.forecast = build_forecast_block(query, governance_report)
+                return fallback
+            draft = self._fallback_client.synthesize(query, governance_report, system_prompt)
+            if query.is_forecast_query:
+                draft.forecast = build_forecast_block(query, governance_report)
+            return draft
 
         sources = [
             SourceCitation(
@@ -131,15 +144,31 @@ class OpenAIResponsesSynthesisClient(LLMClient):
             parsed = self._apply_target_price_guardrails(query, governance_report, parsed)
             parsed = self._apply_fundamental_valuation_guardrails(query, governance_report, parsed)
         except (httpx.HTTPError, ValueError, json.JSONDecodeError):
-            return self._fallback_client.synthesize(query, governance_report, system_prompt)
+            draft = self._fallback_client.synthesize(query, governance_report, system_prompt)
+            if query.is_forecast_query:
+                draft.forecast = build_forecast_block(query, governance_report)
+            return draft
+
+        summary = self._coerce_string(parsed.get("summary"), "資料不足，無法確認。")
+
+        # Build forecast block for forecast queries and apply guardrails
+        forecast_block = None
+        highlights = self._coerce_list(parsed.get("highlights"))
+        facts = self._coerce_list(parsed.get("facts"))
+        if query.is_forecast_query:
+            forecast_block = build_forecast_block(query, governance_report)
+            summary = apply_forecast_guardrail(summary, forecast_block)
+            highlights = apply_forecast_guardrail_to_list(highlights, forecast_block)
+            facts = apply_forecast_guardrail_to_list(facts, forecast_block)
 
         return AnswerDraft(
-            summary=self._coerce_string(parsed.get("summary"), "資料不足，無法確認。"),
-            highlights=self._coerce_list(parsed.get("highlights")),
-            facts=self._coerce_list(parsed.get("facts")),
+            summary=summary,
+            highlights=highlights,
+            facts=facts,
             impacts=self._coerce_list(parsed.get("impacts")),
             risks=self._coerce_list(parsed.get("risks")),
             sources=sources,
+            forecast=forecast_block,
         )
 
     def _synthesize_preliminary(
@@ -246,7 +275,26 @@ class OpenAIResponsesSynthesisClient(LLMClient):
     def _build_intent_instructions(self, query: StructuredQuery) -> list[str]:
         base = self._INTENT_INSTRUCTIONS.get(query.intent, [])
         tag_hint = f"Active topic tags: {', '.join(query.topic_tags)}" if query.topic_tags else ""
-        return [line for line in ([tag_hint] + base) if line]
+        lines = [line for line in ([tag_hint] + base) if line]
+
+        # Inject forecast-specific hard rules
+        if query.is_forecast_query:
+            forecast_rules = [
+                "FORECAST RULES (mandatory):",
+                "- This is a forward-looking forecast query. Start the summary by stating the forecast window and date range.",
+                "- Clearly distinguish between 'future scenario estimate' and 'historical fact'.",
+                "- Do NOT present historical high/low points as future predictions.",
+                "- Use scenario language: '情境推估', '可能', '偏向' — never '一定會', '肯定', '必定'.",
+                "- State the direction tendency (偏多/偏空/區間震盪/無法判定) explicitly.",
+                "- If using historical price data as proxy, explicitly say '以近期歷史波動作為代理參考'.",
+                "- Do NOT fabricate specific price numbers or ranges. Only use numbers that appear in the evidence.",
+                "- If no price range can be derived from evidence, say '目前無法提供具體價格區間' instead of inventing numbers.",
+            ]
+            if query.forecast_horizon_label:
+                forecast_rules.append(f"- Forecast window label: {query.forecast_horizon_label}")
+            lines.extend(forecast_rules)
+
+        return lines
 
     def _build_local_preliminary_fallback(self, query: StructuredQuery) -> AnswerDraft:
         label = query.company_name or query.ticker or "此標的"

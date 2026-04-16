@@ -92,3 +92,18 @@ class TopicTag(str, Enum):
     CASH_FLOW      = "現金流"
     DEBT           = "負債"
     LISTING        = "上市"
+
+
+class ForecastMode(str, Enum):
+    """How the forecast was derived."""
+    SCENARIO_ESTIMATE = "scenario_estimate"
+    HISTORICAL_PROXY = "historical_proxy"
+    UNSUPPORTED = "unsupported"
+
+
+class ForecastDirection(str, Enum):
+    """Directional bias for a forecast."""
+    BULLISH_BIAS = "bullish_bias"
+    BEARISH_BIAS = "bearish_bias"
+    RANGE_BOUND = "range_bound"
+    UNDETERMINED = "undetermined"

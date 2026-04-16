@@ -118,6 +118,25 @@ foreach ($item in $response.risks) {
     Write-Host "- $item"
 }
 
+# --- Forecast block (only for forecast queries) ---
+if ($null -ne $response.forecast) {
+    $fc = $response.forecast
+    Write-Host ""
+    Write-Host "=== Forecast ==="
+    Write-Host "Forecast Window: $($fc.forecast_window.label) ($($fc.forecast_window.start_date) ~ $($fc.forecast_window.end_date))"
+    Write-Host "Direction: $($fc.direction)"
+    if ($null -ne $fc.scenario_range) {
+        Write-Host "Scenario Range: $($fc.scenario_range.low) ~ $($fc.scenario_range.high) ($($fc.scenario_range.basis_type))"
+    }
+    if ($null -ne $fc.forecast_basis -and $fc.forecast_basis.Count -gt 0) {
+        Write-Host "Forecast Basis:"
+        foreach ($basis in $fc.forecast_basis) {
+            Write-Host "  - $basis"
+        }
+    }
+    Write-Host "Mode: $($fc.mode)"
+}
+
 Write-Host ""
 Write-Host "Sources API:"
 Write-Host "$BaseUrl/api/sources/$($response.query_id)"

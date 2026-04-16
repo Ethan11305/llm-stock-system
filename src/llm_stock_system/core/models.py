@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from collections.abc import Mapping
 from dataclasses import dataclass, field as dataclass_field
 from datetime import datetime
@@ -9,6 +11,8 @@ from .enums import (
     ConfidenceLight,
     ConsistencyStatus,
     DataFacet,
+    ForecastDirection,
+    ForecastMode,
     FreshnessStatus,
     Intent,
     SourceTier,
@@ -173,6 +177,27 @@ def _dedupe_preserving_order(values: list[str]) -> list[str]:
     return deduped
 
 
+class ForecastWindow(BaseModel):
+    label: str
+    start_date: str
+    end_date: str
+
+
+class ScenarioRange(BaseModel):
+    low: float
+    high: float
+    basis_type: str  # e.g. "analyst_target", "historical_proxy", "support_resistance"
+
+
+class ForecastBlock(BaseModel):
+    """Structured forecast output attached to QueryResponse."""
+    mode: ForecastMode
+    forecast_window: ForecastWindow
+    direction: ForecastDirection = ForecastDirection.UNDETERMINED
+    scenario_range: ScenarioRange | None = None
+    forecast_basis: list[str] = Field(default_factory=list)
+
+
 class QueryRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -201,6 +226,12 @@ class StructuredQuery(BaseModel):
     tag_source: str = "empty"
     question_type: str = "market_summary"
     stance_bias: StanceBias = StanceBias.NEUTRAL
+    # --- Forecast semantic fields ---
+    is_forecast_query: bool = False
+    wants_direction: bool = False
+    wants_scenario_range: bool = False
+    forecast_horizon_label: str | None = None
+    forecast_horizon_days: int | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -221,6 +252,14 @@ class StructuredQuery(BaseModel):
 
         legacy_data_facets = set(values.get("data_facets") or [])
         preferred_facets |= legacy_data_facets - required_facets
+
+        # --- Forecast facet override ---
+        # price_outlook with is_forecast_query should require PRICE_HISTORY
+        # (not PE_VALUATION) and demote PE_VALUATION/NEWS to preferred.
+        if values.get("is_forecast_query") and question_type == "price_outlook":
+            required_facets = {DataFacet.PRICE_HISTORY}
+            preferred_facets = (preferred_facets | {DataFacet.PE_VALUATION, DataFacet.NEWS}) - required_facets
+
         values["required_facets"] = required_facets
         values["preferred_facets"] = preferred_facets
         values["data_facets"] = required_facets | preferred_facets
@@ -411,6 +450,7 @@ class AnswerDraft(BaseModel):
     impacts: list[str] = Field(default_factory=list)
     risks: list[str] = Field(default_factory=list)
     sources: list[SourceCitation] = Field(default_factory=list)
+    forecast: ForecastBlock | None = None
 
 
 class ValidationResult(BaseModel):
@@ -439,6 +479,7 @@ class QueryResponse(BaseModel):
     confidence_score: float = Field(alias="confidenceScore")
     sources: list[SourceCitation]
     disclaimer: str
+    forecast: ForecastBlock | None = None
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -448,4 +489,5 @@ class SourceResponse(BaseModel):
     ticker: str | None
     topic: Topic
     source_count: int
-    sources: list[SourceCitation]
+    sources: list[SourceCitation] = Field(default_factory=list)
+ 

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import re
 
 from llm_stock_system.core.enums import StanceBias, Topic, TopicTag
@@ -115,6 +117,47 @@ class InputLayer:
         "還能跌",
         "上漲空間",
         "下跌空間",
+    )
+    # Forward-looking time window keywords: when combined with direction/range
+    # demand, the query is a forecast (price_outlook), not a historical price_range.
+    FORECAST_TIME_WINDOW_KEYWORDS = (
+        "未來",
+        "下週",
+        "下一週",
+        "這週",
+        "這一週",
+        "這個星期",
+        "這一個星期",
+        "下個星期",
+        "接下來",
+        "明天",
+        "明日",
+        "後天",
+        "下個月",
+        "下半年",
+        "上半年",
+    )
+    # Direction/range demand keywords that, when combined with a future time
+    # window, route the query to forecast instead of historical price_range.
+    FORECAST_DEMAND_KEYWORDS = (
+        "預期",
+        "預估",
+        "預測",
+        "可能",
+        "會上漲",
+        "會下跌",
+        "會漲",
+        "會跌",
+        "波動如何",
+        "波動",
+        "漲還是跌",
+        "偏多",
+        "偏空",
+        "看漲",
+        "看跌",
+        "區間",
+        "估計",
+        "推估",
     )
     FUNDAMENTAL_OVERVIEW_KEYWORDS = (
         "\u57fa\u672c\u9762",
@@ -462,6 +505,11 @@ class InputLayer:
         )
         stance_bias = self._detect_stance_bias(query_text)
 
+        # --- Forecast semantic fields ---
+        is_forecast, wants_dir, wants_range, horizon_label, horizon_days = (
+            self._detect_forecast_semantics(query_text, question_type)
+        )
+
         return StructuredQuery(
             user_query=query_text,
             ticker=ticker,
@@ -477,6 +525,11 @@ class InputLayer:
             tag_source=tag_source,
             question_type=question_type,
             stance_bias=stance_bias,
+            is_forecast_query=is_forecast,
+            wants_direction=wants_dir,
+            wants_scenario_range=wants_range,
+            forecast_horizon_label=horizon_label,
+            forecast_horizon_days=horizon_days,
         )
 
     def _extract_ticker(self, query: str) -> str | None:
@@ -804,6 +857,20 @@ class InputLayer:
             for token in self.PRICE_LEVEL_FUTURE_HINTS
         )
 
+        # --- Forecast pre-check: future time window + direction/range demand ---
+        # Must run BEFORE price_range so that "這一個星期預估區間" routes to
+        # price_outlook, not price_range.
+        has_forecast_time_window = any(
+            keyword in query or keyword.lower().replace(" ", "") in compacted
+            for keyword in self.FORECAST_TIME_WINDOW_KEYWORDS
+        )
+        has_forecast_demand = any(
+            keyword in query or keyword.lower().replace(" ", "") in compacted
+            for keyword in self.FORECAST_DEMAND_KEYWORDS
+        )
+        if has_forecast_time_window and has_forecast_demand:
+            return "price_outlook"
+
         if any(keyword in query or keyword.lower().replace(" ", "") in compacted for keyword in self.PRICE_RANGE_KEYWORDS):
             return "price_range"
         if has_gross_margin and has_turnaround and stock_mention_count < 2:
@@ -1057,6 +1124,80 @@ class InputLayer:
 
         fallback = self.QUESTION_TYPE_FALLBACK_TOPIC_TAGS.get(question_type, ())
         return [], list(fallback)
+
+    def _detect_forecast_semantics(
+        self, query: str, question_type: str,
+    ) -> tuple[bool, bool, bool, str | None, int | None]:
+        """Return (is_forecast, wants_direction, wants_range, horizon_label, horizon_days).
+
+        A query is a forecast query if question_type == price_outlook AND
+        it contains forward-looking time/demand signals.
+        """
+        if question_type != "price_outlook":
+            return False, False, False, None, None
+
+        compacted = self._compact_query(query)
+
+        # Determine if the query has forward-looking signals
+        has_time_window = any(
+            kw in query or kw.lower().replace(" ", "") in compacted
+            for kw in self.FORECAST_TIME_WINDOW_KEYWORDS
+        )
+        has_demand = any(
+            kw in query or kw.lower().replace(" ", "") in compacted
+            for kw in self.FORECAST_DEMAND_KEYWORDS
+        )
+        has_outlook_kw = any(
+            kw in query or kw.lower().replace(" ", "") in compacted
+            for kw in self.PRICE_OUTLOOK_KEYWORDS
+        )
+        is_forecast = has_outlook_kw or (has_time_window and has_demand)
+
+        if not is_forecast:
+            return False, False, False, None, None
+
+        # Direction demand
+        direction_tokens = (
+            "漲", "跌", "偏多", "偏空", "看漲", "看跌", "會上漲", "會下跌",
+            "漲還是跌", "走勢", "目標價",
+        )
+        wants_direction = any(t in query for t in direction_tokens)
+
+        # Range demand
+        range_tokens = ("區間", "預估區間", "波動", "波動如何", "高低點")
+        wants_range = any(t in query for t in range_tokens)
+
+        # Horizon detection
+        horizon_label, horizon_days = self._detect_forecast_horizon(query)
+
+        return is_forecast, wants_direction, wants_range, horizon_label, horizon_days
+
+    def _detect_forecast_horizon(self, query: str) -> tuple[str | None, int | None]:
+        """Parse forward-looking horizon from the query text."""
+        compacted = self._compact_query(query)
+
+        horizon_map: list[tuple[tuple[str, ...], str, int]] = [
+            (("明天", "明日"), "明天", 1),
+            (("後天",), "後天", 2),
+            (("這週", "這一週", "這個星期", "這一個星期"), "本週", 7),
+            (("下週", "下一週", "下個星期"), "下週", 7),
+            (("一週", "一個星期", "一星期", "7天"), "未來一週", 7),
+            (("兩週", "兩個星期", "二週", "14天"), "未來兩週", 14),
+            (("一個月", "下個月", "30天"), "未來一個月", 30),
+            (("一季", "三個月"), "未來一季", 90),
+            (("半年", "六個月"), "未來半年", 180),
+            (("一年",), "未來一年", 365),
+        ]
+
+        for tokens, label, days in horizon_map:
+            if any(t in query or t.lower().replace(" ", "") in compacted for t in tokens):
+                return label, days
+
+        # Default: if a future window keyword exists but no specific length, assume one week
+        if any(t in query or t.lower().replace(" ", "") in compacted for t in self.FORECAST_TIME_WINDOW_KEYWORDS):
+            return "未來", 7
+
+        return None, None
 
     def _detect_stance_bias(self, query: str) -> StanceBias:
         compacted = self._compact_query(query)

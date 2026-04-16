@@ -19,7 +19,16 @@ class PresentationLayer:
         governance_report: GovernanceReport,
         validation_result: ValidationResult,
     ) -> QueryResponse:
-        if validation_result.confidence_light == ConfidenceLight.RED:
+        if validation_result.confidence_light == ConfidenceLight.RED and answer_draft.forecast is not None:
+            # Forecast special case: RED but has structured forecast content.
+            # Preserve the original summary/highlights/facts (already guardrailed)
+            # instead of replacing with generic "資料不足" fallback.
+            summary = answer_draft.summary
+            highlights = answer_draft.highlights[:3]
+            facts = answer_draft.facts[:3]
+            impacts = answer_draft.impacts[:3]
+            risks = answer_draft.risks[:4]
+        elif validation_result.confidence_light == ConfidenceLight.RED:
             summary = self._red_summary(answer_draft.summary)
             highlights = answer_draft.highlights[:3] or [
                 "\u73fe\u6709\u8b49\u64da\u4e0d\u8db3\u6216\u4e00\u81f4\u6027\u4e0d\u8db3\uff0c\u7cfb\u7d71\u5df2\u964d\u7d1a\u56de\u7b54\u3002"
@@ -58,6 +67,7 @@ class PresentationLayer:
             confidenceScore=validation_result.confidence_score,
             sources=answer_draft.sources,
             disclaimer=self.DISCLAIMER,
+            forecast=answer_draft.forecast,
         )
 
     def _red_summary(self, summary: str) -> str:
