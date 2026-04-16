@@ -9,7 +9,7 @@ from llm_stock_system.core.target_price import (
     is_forward_price_question,
     is_target_price_question,
 )
-from llm_stock_system.core.validation_profiles import ConditionKind, ValidationProfile, ValidationRule
+from llm_stock_system.core.validation_profiles import ConditionKind, ValidationProfile, ValidationRule, get_profile
 
 
 class ValidationLayer:
@@ -165,17 +165,14 @@ class ValidationLayer:
         confidence_score: float,
         warnings: list[str],
     ) -> float:
-        """Evaluate a declarative validation profile without changing call flow.
-
-        PR1 keeps the legacy ``_apply_question_type_rules()`` path in production.
-        This evaluator exists so we can add direct tests and dual-run parity checks
-        before switching runtime behavior in a later PR.
-        """
+        """Evaluate an intent profile with optional topic-tag rule sets."""
         source_names = self._source_names(governance_report)
-        normalized_text = self._combined_text(governance_report).lower()
+        combined_text = self._combined_text(governance_report)
+        normalized_text = combined_text.lower()
+        query_tags = set(query.topic_tags)
 
-        for rule in profile.rules:
-            confidence_score = self._apply_profile_rule(
+        for rule in profile.base_rules:
+            confidence_score = self._apply_rule(
                 rule,
                 query,
                 governance_report,
@@ -185,6 +182,32 @@ class ValidationLayer:
                 confidence_score,
                 warnings,
             )
+
+        for tag_rule_set in profile.tag_rules:
+            if not tag_rule_set.required_tags.issubset(query_tags):
+                continue
+
+            for rule in tag_rule_set.rules:
+                confidence_score = self._apply_rule(
+                    rule,
+                    query,
+                    governance_report,
+                    answer_draft,
+                    source_names,
+                    normalized_text,
+                    confidence_score,
+                    warnings,
+                )
+
+            if tag_rule_set.custom_validator is not None:
+                confidence_score = tag_rule_set.custom_validator(
+                    query,
+                    governance_report,
+                    answer_draft,
+                    confidence_score,
+                    warnings,
+                )
+            break
 
         if profile.custom_validator is not None:
             confidence_score = profile.custom_validator(
@@ -197,7 +220,7 @@ class ValidationLayer:
 
         return confidence_score
 
-    def _apply_profile_rule(
+    def _apply_rule(
         self,
         rule: ValidationRule,
         query: StructuredQuery,
@@ -305,68 +328,17 @@ class ValidationLayer:
         confidence_score: float,
         warnings: list[str],
     ) -> float:
-        source_names = self._source_names(governance_report)
-        combined_text = self._combined_text(governance_report)
-        normalized_text = combined_text.lower()
-
-        if query.question_type == "price_outlook":
-            if is_forward_price_question(query):
-                return self._apply_price_outlook_rules(query, governance_report, confidence_score, warnings)
-            return self._apply_directional_price_rules(query, governance_report, confidence_score, warnings)
-        if query.question_type == "ex_dividend_performance":
-            return self._apply_ex_dividend_rules(source_names, confidence_score, warnings)
-        if query.question_type == "technical_indicator_review":
-            return self._apply_technical_indicator_rules(source_names, confidence_score, warnings)
-        if query.question_type == "season_line_margin_review":
-            return self._apply_season_line_margin_rules(source_names, confidence_score, warnings)
-        if query.question_type == "fcf_dividend_sustainability_review":
-            return self._apply_fcf_dividend_rules(source_names, confidence_score, warnings)
-        if query.question_type == "monthly_revenue_yoy_review":
-            return self._apply_monthly_revenue_rules(
-                source_names,
-                answer_draft,
-                confidence_score,
-                warnings,
-            )
-        if query.question_type == "shipping_rate_impact_review":
-            return self._apply_shipping_rate_rules(query, governance_report, normalized_text, confidence_score, warnings)
-        if query.question_type == "electricity_cost_impact_review":
-            return self._apply_electricity_cost_rules(query, governance_report, normalized_text, confidence_score, warnings)
-        if query.question_type == "macro_yield_sentiment_review":
-            return self._apply_macro_yield_rules(query, governance_report, normalized_text, confidence_score, warnings)
-        if query.question_type == "gross_margin_comparison_review":
-            return self._apply_gross_margin_comparison_rules(
-                query,
-                governance_report,
-                source_names,
-                normalized_text,
-                confidence_score,
-                warnings,
-            )
-        if query.question_type == "margin_turnaround_review":
-            return self._apply_margin_turnaround_rules(
-                governance_report,
-                source_names,
-                combined_text,
-                confidence_score,
-                warnings,
-            )
-        if query.question_type == "profitability_stability_review":
-            return self._apply_profitability_stability_rules(
-                governance_report,
-                source_names,
-                combined_text,
-                confidence_score,
-                warnings,
-            )
-        if query.question_type == "debt_dividend_safety_review":
-            return self._apply_debt_dividend_rules(source_names, confidence_score, warnings)
-        if query.question_type == "pe_valuation_review":
-            return self._apply_pe_valuation_rules(source_names, confidence_score, warnings)
-        if query.question_type in {"fundamental_pe_review", "investment_support"}:
-            return self._apply_fundamental_valuation_rules(governance_report, confidence_score, warnings)
-
-        return confidence_score
+        profile = get_profile(query.intent)
+        if profile is None:
+            return confidence_score
+        return self._evaluate_profile(
+            profile,
+            query,
+            governance_report,
+            answer_draft,
+            confidence_score,
+            warnings,
+        )
 
     def _apply_directional_price_rules(
         self,

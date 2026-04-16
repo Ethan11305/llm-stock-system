@@ -76,9 +76,9 @@ class ValidationRuleEngineTestCase(unittest.TestCase):
         self.validation = ValidationLayer(min_green_confidence=0.8, min_yellow_confidence=0.55)
 
     def test_warning_only_profile_keeps_score(self) -> None:
-        profile = get_profile("technical_indicator_review")
-        assert profile is not None
         query = build_query("technical_indicator_review")
+        profile = get_profile(query.intent)
+        assert profile is not None
         evidence = [
             build_evidence("Generic source", "Context 1", "market commentary"),
             build_evidence("Generic source", "Context 2", "market commentary"),
@@ -101,9 +101,9 @@ class ValidationRuleEngineTestCase(unittest.TestCase):
         self.assertIn("no price evidence", warnings[0])
 
     def test_dual_signal_profile_caps_to_yellow(self) -> None:
-        profile = get_profile("season_line_margin_review")
-        assert profile is not None
         query = build_query("season_line_margin_review")
+        profile = get_profile(query.intent)
+        assert profile is not None
         evidence = [
             build_evidence("FinMind TaiwanStockPrice", "Price snapshot 1", "price trend remains weak"),
             build_evidence("FinMind TaiwanStockPrice", "Price snapshot 2", "price remains below season line"),
@@ -126,12 +126,12 @@ class ValidationRuleEngineTestCase(unittest.TestCase):
         self.assertIn("missing one of price or margin evidence", warnings[0])
 
     def test_custom_validator_profile_caps_target_price_context(self) -> None:
-        profile = get_profile("price_outlook")
-        assert profile is not None
         query = build_query(
             "price_outlook",
             user_query="TSMC 未來一年目標價是多少？",
         )
+        profile = get_profile(query.intent)
+        assert profile is not None
         evidence = [
             build_evidence("Broker research", "Analyst update", "法人目標價上看 1280 元"),
             build_evidence("Broker research", "Valuation note", "target price 1280 based on demand recovery"),
