@@ -75,6 +75,7 @@ class TopicTag(str, Enum):
     human-readable Chinese label that is also stable enough to be used as a
     routing signal in the Retrieval and Generation layers.
     """
+    # ── 原有分類 ──
     SHIPPING       = "航運"
     ELECTRICITY    = "電價"
     MACRO          = "總經"
@@ -92,6 +93,21 @@ class TopicTag(str, Enum):
     CASH_FLOW      = "現金流"
     DEBT           = "負債"
     LISTING        = "上市"
+
+    # ── 新增分類 ──
+    PROFITABILITY        = "獲利能力"
+    OPERATING_EFFICIENCY = "營運效率"
+    CAPEX_RD             = "資本支出研發"
+    INSTITUTIONAL        = "法人動態"
+    COMPETITIVE          = "競爭優勢"
+    SUPPLY_CHAIN         = "供應鏈"
+    ESG                  = "ESG永續"
+    REGULATORY           = "政策法規"
+    EVENT                = "重大事件"
+    INDEX_REBAL          = "指數調整"
+    FX                   = "匯率"
+    SENTIMENT            = "市場情緒"
+    RISK_MGMT            = "風險管理"
 
 
 class ForecastMode(str, Enum):

@@ -426,23 +426,169 @@ class InputLayer:
     }
 
     _TOPIC_TAG_KEYWORD_MAP: dict[TopicTag, tuple[str, ...]] = {
-        TopicTag.SHIPPING: ("\u822a\u904b", "\u96c6\u904b", "\u822a\u7dda", "SCFI", "scfi", "\u904b\u50f9", "\u904b\u50f9\u6307\u6578", "\u7d05\u6d77"),
-        TopicTag.ELECTRICITY: ("\u5de5\u696d\u96fb\u50f9", "\u96fb\u50f9", "\u96fb\u8cbb", "\u8abf\u6f32", "\u6f32\u50f9", "\u7528\u96fb"),
-        TopicTag.MACRO: ("CPI", "cpi", "\u901a\u81a8", "\u7f8e\u50b5", "\u5229\u7387", "\u6b96\u5229\u7387", "\u964d\u606f", "\u5347\u606f"),
-        TopicTag.GUIDANCE: ("\u6cd5\u8aaa", "\u6cd5\u8aaa\u6703", "\u71df\u904b\u6307\u5f15", "\u6307\u5f15", "\u8ca1\u6e2c", "\u5c55\u671b"),
-        TopicTag.TECHNICAL: ("RSI", "rsi", "KD", "kd", "MACD", "macd", "\u6280\u8853\u6307\u6a19", "\u5747\u7dda", "\u8d85\u8cb7", "\u8d85\u8ce3"),
-        TopicTag.MARGIN_FLOW: ("\u878d\u8cc7", "\u878d\u5238", "\u4fe1\u7528\u4ea4\u6613", "\u7c4c\u78bc", "\u5b63\u7dda", "60MA", "60ma", "ma60"),
-        TopicTag.SEMICON_EQUIP: ("\u534a\u5c0e\u9ad4\u8a2d\u5099", "\u8a2d\u5099\u80a1", "\u8a2d\u5099\u65cf\u7fa4", "ASML", "asml", "\u827e\u53f8\u6469\u723e"),
-        TopicTag.EV: ("\u96fb\u52d5\u8eca", "EV", "ev", "\u96fb\u6c60", "\u4f9b\u61c9\u93c8"),
-        TopicTag.AI: ("AI", "ai", "\u4f3a\u670d\u5668", "server"),
-        TopicTag.DIVIDEND: ("\u80a1\u5229", "\u914d\u606f", "\u73fe\u91d1\u80a1\u5229", "\u9664\u606f", "\u9664\u6b0a", "\u6b96\u5229\u7387"),
-        TopicTag.REVENUE: ("\u71df\u6536", "\u6708\u71df\u6536", "\u7d2f\u8a08\u71df\u6536", "MoM", "mom", "\u5e74\u589e", "\u6708\u589e"),
-        TopicTag.GROSS_MARGIN: ("\u6bdb\u5229\u7387", "\u6bdb\u5229", "\u71df\u696d\u6bdb\u5229"),
-        TopicTag.VALUATION: ("\u672c\u76ca\u6bd4", "P/E", "p/e", "pe ratio", "\u4f30\u503c"),
-        TopicTag.FUNDAMENTAL: ("\u57fa\u672c\u9762", "\u9ad4\u8cea", "\u71df\u904b", "EPS", "eps"),
-        TopicTag.CASH_FLOW: ("\u73fe\u91d1\u6d41", "\u81ea\u7531\u73fe\u91d1\u6d41", "FCF", "fcf", "\u71df\u696d\u73fe\u91d1\u6d41"),
-        TopicTag.DEBT: ("\u8ca0\u50b5", "\u8ca0\u50b5\u6bd4", "\u8ca0\u50b5\u6bd4\u7387", "\u69d3\u687f"),
-        TopicTag.LISTING: ("\u4e0a\u5e02", "\u639b\u724c", "\u8f49\u4e0a\u5e02", "IPO", "ipo"),
+        # ── 原有分類（擴充關鍵字）──
+        TopicTag.SHIPPING: (
+            "航運", "集運", "航線", "SCFI", "scfi", "運價", "運價指數", "紅海",
+        ),
+        TopicTag.ELECTRICITY: (
+            "工業電價", "電價", "電費", "調漲", "漲價", "用電",
+        ),
+        TopicTag.MACRO: (
+            "CPI", "cpi", "通膨", "美債", "利率", "殖利率", "降息", "升息",
+            "消費者信心", "貿易制裁", "聯準會", "Fed", "fed", "GDP", "gdp",
+            "PMI", "pmi", "失業率", "非農",
+        ),
+        TopicTag.GUIDANCE: (
+            "法說", "法說會", "營運指引", "指引", "財測", "展望",
+            "業績展望", "營運展望",
+        ),
+        TopicTag.TECHNICAL: (
+            "RSI", "rsi", "KD", "kd", "MACD", "macd", "技術指標", "均線", "超買", "超賣",
+            "布林通道", "Bollinger", "bollinger", "ADX", "adx", "ATR", "atr",
+            "Beta", "beta", "斐波那契", "Fibonacci", "fibonacci",
+            "支撐", "壓力", "支撐位", "壓力位", "跳空", "缺口",
+            "K線", "k線", "長紅", "吞噬", "十字星", "錘子線",
+            "成交量", "量價背離", "量縮", "量增", "爆量",
+            "Volume Profile", "volume profile", "籌碼密集區",
+            "資金流向", "Money Flow", "money flow", "MFI", "mfi",
+            "股價波動率", "相對強弱",
+        ),
+        TopicTag.MARGIN_FLOW: (
+            "融資", "融券", "信用交易", "籌碼", "季線", "60MA", "60ma", "ma60",
+            "借券", "借券賣出", "還券", "券資比",
+        ),
+        TopicTag.SEMICON_EQUIP: (
+            "半導體設備", "設備股", "設備族群", "ASML", "asml", "艾司摩爾",
+            "先進封裝", "CoWoS", "cowos",
+        ),
+        TopicTag.EV: (
+            "電動車", "EV", "ev", "電池", "充電樁", "儲能",
+        ),
+        TopicTag.AI: (
+            "AI", "ai", "伺服器", "server", "GPU", "gpu", "HBM", "hbm",
+            "大語言模型", "LLM", "llm", "資料中心", "data center",
+        ),
+        TopicTag.DIVIDEND: (
+            "股利", "配息", "現金股利", "除息", "除權", "殖利率",
+            "填息", "除權息", "股票股利", "配股", "再投資",
+        ),
+        TopicTag.REVENUE: (
+            "營收", "月營收", "累計營收", "MoM", "mom", "年增", "月增",
+            "YoY", "yoy", "QoQ", "qoq", "營收成長率", "季營收",
+        ),
+        TopicTag.GROSS_MARGIN: (
+            "毛利率", "毛利", "營業毛利",
+            "產品組合", "成本控管", "毛利率提升",
+        ),
+        TopicTag.VALUATION: (
+            "本益比", "P/E", "p/e", "pe ratio", "估值",
+            "本淨比", "P/B", "p/b", "pb ratio",
+            "EV/EBITDA", "ev/ebitda", "企業價值倍數",
+            "股價營收比", "P/S", "p/s", "ps ratio",
+            "PEG", "peg", "股價成長比",
+            "DCF", "dcf", "現金流量折現", "內含價值",
+            "Forward P/E", "forward p/e", "前瞻本益比",
+            "安全邊際", "庫藏股",
+        ),
+        TopicTag.FUNDAMENTAL: (
+            "基本面", "體質", "營運", "EPS", "eps",
+            "每股盈餘", "淨利", "Net Income", "net income",
+            "財報", "季報", "年報",
+        ),
+        TopicTag.CASH_FLOW: (
+            "現金流", "自由現金流", "FCF", "fcf", "營業現金流",
+            "現金流對淨利比", "盈餘品質", "Quality of Earnings",
+        ),
+        TopicTag.DEBT: (
+            "負債", "負債比", "負債比率", "槓桿",
+            "利息保障倍數", "Interest Coverage", "interest coverage",
+            "財務槓桿", "Debt-to-Equity", "debt-to-equity",
+        ),
+        TopicTag.LISTING: (
+            "上市", "掛牌", "轉上市", "IPO", "ipo",
+            "減資", "增資", "現金增資", "GDR", "gdr", "海外存託憑證",
+        ),
+
+        # ── 新增分類 ──
+        TopicTag.PROFITABILITY: (
+            "獲利能力", "淨利率", "營業利益率", "Operating Margin", "operating margin",
+            "ROE", "roe", "股東權益報酬率",
+            "ROA", "roa", "資產報酬率",
+            "業外損益", "業外收入", "業外支出",
+        ),
+        TopicTag.OPERATING_EFFICIENCY: (
+            "營運效率", "存貨週轉", "存貨週轉天數", "Inventory Turnover", "inventory turnover",
+            "應收帳款", "應收帳款週轉", "AR Turnover", "ar turnover",
+            "速動比率", "流動比率", "流動性",
+        ),
+        TopicTag.CAPEX_RD: (
+            "資本支出", "CAPEX", "capex", "產能擴張", "擴產",
+            "研發費用", "研發", "R&D", "r&d", "研發投入", "研發轉化率",
+        ),
+        TopicTag.INSTITUTIONAL: (
+            "外資", "外資買賣超", "投信", "共同基金",
+            "內部人", "內部人持股", "董監持股",
+            "大股東", "散戶", "散戶持股",
+            "官股", "國家隊",
+            "目標價", "分析師", "研究報告", "研報",
+            "集中度", "持股集中度",
+        ),
+        TopicTag.COMPETITIVE: (
+            "市佔率", "市場佔有率", "Market Share", "market share",
+            "護城河", "Moat", "moat", "品牌優勢", "專利",
+            "定價能力", "Pricing Power", "pricing power", "轉嫁能力",
+            "產品生命週期", "替代技術", "破壞式創新",
+            "規模經濟", "網絡效應",
+            "垂直整合", "水平擴張",
+            "特許經營", "特許門檻", "進入障礙",
+            "管理階層", "資本配置", "Capital Allocation",
+        ),
+        TopicTag.SUPPLY_CHAIN: (
+            "供應鏈", "Supply Chain", "supply chain",
+            "供應商", "客戶集中度", "主要客戶",
+            "供應鏈韌性", "集中風險", "關鍵供應商",
+        ),
+        TopicTag.ESG: (
+            "ESG", "esg", "永續", "永續經營",
+            "碳排", "碳中和", "淨零", "減碳",
+            "社會責任", "CSR", "csr",
+            "公司治理", "數位轉型",
+        ),
+        TopicTag.REGULATORY: (
+            "政策", "監管", "法規", "政策利多", "政策利空",
+            "地緣政治", "貿易戰", "制裁",
+            "產業政策", "補貼", "反壟斷",
+        ),
+        TopicTag.EVENT: (
+            "併購", "M&A", "m&a", "收購", "合併",
+            "訴訟", "官司", "法律糾紛",
+            "策略聯盟", "簽約", "合作案",
+            "經營權", "董事會改選", "委託書",
+            "新產品", "產品發佈", "技術突破",
+        ),
+        TopicTag.INDEX_REBAL: (
+            "MSCI", "msci", "富時", "FTSE", "ftse",
+            "權重調整", "指數調整", "成分股", "納入指數", "剔除指數",
+        ),
+        TopicTag.FX: (
+            "匯率", "外匯", "台幣", "美元", "匯損", "匯兌",
+            "Exchange Rate", "exchange rate", "日圓", "人民幣",
+        ),
+        TopicTag.SENTIMENT: (
+            "VIX", "vix", "恐慌", "恐慌指數",
+            "市場情緒", "情緒過熱", "市場敘事",
+            "鈍化", "利空鈍化", "利多鈍化",
+            "空單平倉", "Short Squeeze", "short squeeze", "軋空",
+        ),
+        TopicTag.RISK_MGMT: (
+            "停損", "停利", "停損位", "停利點",
+            "對沖", "避險", "Hedging", "hedging",
+            "最大回撤", "Max Drawdown", "max drawdown",
+            "風險承受", "風險承受度",
+            "部位配置", "Position Sizing", "position sizing",
+            "持有時間", "短線", "長線", "波段",
+            "轉機股", "成長股", "定存股", "題材股", "價值股",
+        ),
     }
 
     def __init__(self, stock_resolver: StockResolver | None = None) -> None:

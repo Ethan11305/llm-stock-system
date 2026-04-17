@@ -1,6 +1,10 @@
+import logging
+
 from llm_stock_system.core.enums import ConfidenceLight, ConsistencyStatus, ForecastMode, FreshnessStatus, StanceBias
 from llm_stock_system.core.models import AnswerDraft, ForecastBlock, GovernanceReport, StructuredQuery, ValidationResult
 from llm_stock_system.core.validation_profiles import ConditionKind, ValidationProfile, ValidationRule, get_profile
+
+logger = logging.getLogger(__name__)
 
 
 class ValidationLayer:
@@ -121,6 +125,48 @@ class ValidationLayer:
             warnings.append("Answer indicates insufficient data.")
             confidence_score = min(confidence_score, 0.25)
 
+        # P2 Integration：從 PolicyRegistry 取得 min_evidence_count。
+        # 若 evidence 數量低於該策略的最低要求，降至 YELLOW 上限（0.75）並加 warning。
+        confidence_score = self._apply_policy_evidence_floor(
+            query, governance_report, confidence_score, warnings
+        )
+
+        return confidence_score
+
+    def _apply_policy_evidence_floor(
+        self,
+        query: StructuredQuery,
+        governance_report: GovernanceReport,
+        confidence_score: float,
+        warnings: list[str],
+    ) -> float:
+        """檢查本次查詢的 policy 是否要求最低 evidence 數量。
+
+        使用 intent + topic_tags 路由（不依賴 question_type），
+        與 Phase 2+ 的 routing 主軸一致。
+
+        若 evidence 數量不足 policy.min_evidence_count，
+        將信心分上限壓到 YELLOW（0.75），並加 warning 說明缺少幾篇。
+        """
+        try:
+            from llm_stock_system.core.query_policy import get_policy_registry
+            policy = get_policy_registry().resolve_by_tags(
+                query.intent, query.topic_tags or []
+            )
+            min_count = policy.min_evidence_count
+            actual_count = len(governance_report.evidence)
+            if min_count > 1 and actual_count < min_count:
+                cap = 0.75  # YELLOW 上限
+                if confidence_score > cap:
+                    confidence_score = cap
+                # 用 policy.question_type 標記查詢類型（僅供 warning 說明，不影響路由）
+                warnings.append(
+                    f"此查詢類型（{policy.question_type}）需要至少 {min_count} 篇證據，"
+                    f"目前只有 {actual_count} 篇。信心分上限 {cap}。"
+                )
+        except Exception:
+            # Registry 不可用時靜默忽略，不影響現有邏輯
+            pass
         return confidence_score
 
     def _apply_forecast_cap(

@@ -29,6 +29,13 @@ class Settings(BaseSettings):
     max_retrieval_docs: int = 8
     min_green_confidence: float = 0.80
     min_yellow_confidence: float = 0.55
+    # P0 Embedding Pipeline
+    embedding_enabled: bool = False  # 需要 openai_api_key 且 DB 支援 pgvector 才啟用
+    embedding_model: str = "text-embedding-3-small"
+    embedding_batch_size: int = 100
+    hybrid_retrieval_semantic_weight: float = 0.6
+    hybrid_retrieval_metadata_weight: float = 0.4
+    semantic_similarity_threshold: float = 0.65
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

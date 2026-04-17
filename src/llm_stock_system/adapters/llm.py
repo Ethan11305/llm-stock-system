@@ -97,7 +97,12 @@ class RuleBasedSynthesisClient(LLMClient):
             for item in governance_report.evidence
         ]
 
-        highlights = [f"{item.title}（{item.source_name}）" for item in governance_report.evidence[:3]]
+        # 預設 highlights：優先顯示 excerpt 摘要，若無 excerpt 才退回標題
+        highlights = [
+            item.excerpt[:120] if item.excerpt and len(item.excerpt) > 20
+            else f"{item.title}（{item.source_name}）"
+            for item in governance_report.evidence[:3]
+        ]
         facts = [
             f"{item.source_name} 於 {item.published_at:%Y-%m-%d} 提供資料：{item.excerpt}"
             for item in governance_report.evidence[:3]
@@ -105,6 +110,16 @@ class RuleBasedSynthesisClient(LLMClient):
         if is_fundamental_valuation_question(query):
             highlights = build_fundamental_valuation_highlights(query, governance_report)
             facts = build_fundamental_valuation_facts(query, governance_report)
+        # earnings / EPS 相關類型也用 excerpt 作為 highlights
+        elif query.question_type in {
+            "earnings_summary", "eps_dividend_review", "revenue_growth_review",
+            "monthly_revenue_yoy_review", "profitability_stability_review",
+            "gross_margin_comparison_review", "season_line_margin_review",
+        }:
+            highlights = [
+                item.excerpt[:120] if item.excerpt else f"{item.title}（{item.source_name}）"
+                for item in governance_report.evidence[:3]
+            ]
         if query.intent == Intent.VALUATION_CHECK and is_forward_price_question(query):
             highlights = [build_forward_price_highlight(query, governance_report), *highlights][:3]
             facts = [build_forward_price_fact(query, governance_report), *facts][:3]
@@ -1191,4 +1206,4 @@ class RuleBasedSynthesisClient(LLMClient):
             return "IPO 後"
         if "掛牌" in query.user_query:
             return "掛牌後"
-        return "轉上市後"
+        return 

@@ -20,7 +20,7 @@ from llm_stock_system.layers.data_governance_layer import DataGovernanceLayer
 from llm_stock_system.layers.generation_layer import GenerationLayer
 from llm_stock_system.layers.input_layer import InputLayer
 from llm_stock_system.layers.presentation_layer import PresentationLayer
-from llm_stock_system.layers.retrieval_layer import RetrievalLayer
+from llm_stock_system.layers.retrieval_layer import HybridRetrievalLayer, RetrievalLayer
 from llm_stock_system.layers.validation_layer import ValidationLayer
 from llm_stock_system.orchestrator.pipeline import QueryPipeline
 from llm_stock_system.services.query_data_hydrator import QueryDataHydrator
@@ -45,6 +45,8 @@ def create_app() -> FastAPI:
     stock_resolver = None
     llm_client = RuleBasedSynthesisClient()
     query_hydrator = None
+    vector_adapter = None
+    embedding_service = None
 
     if settings.openai_api_key:
         llm_client = OpenAIResponsesSynthesisClient(
@@ -82,12 +84,42 @@ def create_app() -> FastAPI:
             market_gateway.ping()
             document_repository = PostgresMarketDocumentRepository(market_gateway)
             stock_resolver = PostgresStockResolver(market_gateway)
+            # P0 Embedding Pipeline（可選，需 openai_api_key + embedding_enabled）
+            if settings.embedding_enabled and settings.openai_api_key:
+                try:
+                    from sqlalchemy import create_engine as _create_engine
+                    from llm_stock_system.services.embedding_service import EmbeddingService
+                    from llm_stock_system.adapters.vector_retrieval import VectorRetrievalAdapter
+
+                    _db_engine = _create_engine(settings.database_url)
+                    embedding_service = EmbeddingService(
+                        openai_api_key=settings.openai_api_key,
+                        model=settings.embedding_model,
+                        batch_size=settings.embedding_batch_size,
+                        db_engine=_db_engine,
+                    )
+                    vector_adapter = VectorRetrievalAdapter(
+                        embedding_service=embedding_service,
+                        db_engine=_db_engine,
+                    )
+                    app.state.embedding_enabled = True
+                except Exception:
+                    # Embedding 初始化失敗不阻擋主流程
+                    embedding_service = None
+                    vector_adapter = None
+                    app.state.embedding_enabled = False
+            else:
+                app.state.embedding_enabled = False
+
             query_hydrator = QueryDataHydrator(
                 market_gateway,
                 low_confidence_warmup_enabled=settings.low_confidence_warmup_enabled,
                 low_confidence_warmup_threshold=settings.low_confidence_warmup_threshold,
                 follow_up_cooldown_hours=settings.low_confidence_warmup_cooldown_hours,
+                embedding_service=embedding_service,
             )
+            # P0: 注入 document_repository，讓 hydrator 在 embed 前能先 upsert documents
+            query_hydrator._document_repository = document_repository
             app.state.low_confidence_warmup_enabled = bool(settings.low_confidence_warmup_enabled)
             app.state.news_pipeline_enabled = bool(news_pipeline and news_pipeline.provider_names)
             app.state.news_provider_names = news_pipeline.provider_names if news_pipeline else []
@@ -101,12 +133,24 @@ def create_app() -> FastAPI:
     else:
         app.state.runtime_mode = "sample-only"
 
-    pipeline = QueryPipeline(
-        input_layer=InputLayer(stock_resolver=stock_resolver),
-        retrieval_layer=RetrievalLayer(
+    # P0：若 vector_adapter 已初始化，使用 HybridRetrievalLayer；否則使用原有 RetrievalLayer
+    if vector_adapter is not None:
+        retrieval_layer = HybridRetrievalLayer(
+            document_repository=document_repository,
+            vector_adapter=vector_adapter,
+            max_documents=settings.max_retrieval_docs,
+            semantic_weight=settings.hybrid_retrieval_semantic_weight,
+            metadata_weight=settings.hybrid_retrieval_metadata_weight,
+        )
+    else:
+        retrieval_layer = RetrievalLayer(
             document_repository=document_repository,
             max_documents=settings.max_retrieval_docs,
-        ),
+        )
+
+    pipeline = QueryPipeline(
+        input_layer=InputLayer(stock_resolver=stock_resolver),
+        retrieval_layer=retrieval_layer,
         data_governance_layer=DataGovernanceLayer(),
         generation_layer=GenerationLayer(
             llm_client=llm_client,

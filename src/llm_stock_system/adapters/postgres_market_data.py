@@ -340,6 +340,36 @@ class FinMindPostgresGateway:
             "CREATE INDEX IF NOT EXISTS idx_stock_news_articles_lookup ON stock_news_articles (ticker, published_at DESC)",
             "CREATE TABLE IF NOT EXISTS margin_purchase_short_sale_bars (ticker VARCHAR(64) NOT NULL, trading_date DATE NOT NULL, margin_purchase_buy BIGINT, margin_purchase_cash_repayment BIGINT, margin_purchase_limit BIGINT, margin_purchase_sell BIGINT, margin_purchase_today_balance BIGINT, margin_purchase_yesterday_balance BIGINT, offset_loan_and_short BIGINT, short_sale_buy BIGINT, short_sale_cash_repayment BIGINT, short_sale_limit BIGINT, short_sale_sell BIGINT, short_sale_today_balance BIGINT, short_sale_yesterday_balance BIGINT, note TEXT, source_name TEXT NOT NULL DEFAULT 'FinMind TaiwanStockMarginPurchaseShortSale', synced_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (ticker, trading_date))",
             "CREATE INDEX IF NOT EXISTS idx_margin_purchase_short_sale_lookup ON margin_purchase_short_sale_bars (ticker, trading_date DESC)",
+            # ── P0 Embedding Pipeline ──────────────────────────────────────────
+            # document_embeddings 基礎表（與 002_schema.sql 一致）
+            "CREATE TABLE IF NOT EXISTS documents (id UUID PRIMARY KEY, ticker VARCHAR(16) NOT NULL, title TEXT NOT NULL, summary_raw TEXT, content_raw TEXT NOT NULL DEFAULT '', content_clean TEXT NOT NULL DEFAULT '', source_name TEXT NOT NULL, source_tier TEXT NOT NULL, source_type TEXT NOT NULL, url TEXT NOT NULL UNIQUE, author TEXT, published_at TIMESTAMP NOT NULL, fetched_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, topic_tags TEXT[] NOT NULL DEFAULT '{}', is_valid BOOLEAN NOT NULL DEFAULT TRUE, is_superseded BOOLEAN NOT NULL DEFAULT FALSE, dedupe_group_id UUID, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+            "CREATE TABLE IF NOT EXISTS document_embeddings (id UUID PRIMARY KEY, document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE, chunk_index INT NOT NULL, chunk_text TEXT NOT NULL, embedding vector(1536) NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+            # Unique constraint（支援 ON CONFLICT upsert）
+            # PostgreSQL 不支援 `ADD CONSTRAINT IF NOT EXISTS`，改用 DO block 檢查後再建立。
+            """
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1
+                    FROM pg_constraint
+                    WHERE conname = 'uq_document_embeddings_doc_chunk'
+                      AND conrelid = 'document_embeddings'::regclass
+                ) THEN
+                    ALTER TABLE document_embeddings
+                        ADD CONSTRAINT uq_document_embeddings_doc_chunk
+                        UNIQUE (document_id, chunk_index);
+                END IF;
+            END
+            $$;
+            """,
+            # Metadata 欄位（避免每次 JOIN documents）
+            "ALTER TABLE document_embeddings ADD COLUMN IF NOT EXISTS ticker VARCHAR(16)",
+            "ALTER TABLE document_embeddings ADD COLUMN IF NOT EXISTS published_at TIMESTAMP",
+            # Ticker index
+            "CREATE INDEX IF NOT EXISTS idx_doc_embeddings_ticker ON document_embeddings (ticker)",
+            # HNSW index（取代 IVFFlat）
+            "DROP INDEX IF EXISTS idx_document_embeddings_ivfflat",
+            "CREATE INDEX IF NOT EXISTS idx_document_embeddings_hnsw ON document_embeddings USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64)",
         ]
         with self._engine.begin() as connection:
             for statement in statements:
@@ -945,26 +975,32 @@ class FinMindPostgresGateway:
 
     def _build_price_documents(self, query: StructuredQuery) -> list[Document]:
         end_date = datetime.now(timezone.utc).date()
-        start_date = end_date - timedelta(days=query.time_range_days)
+        # 至少查 30 天以上，避免短區間因假日/資料空缺而拿不到任何 bar
+        fetch_days = max(query.time_range_days, 30)
+        start_date = end_date - timedelta(days=fetch_days)
         bars = self.get_price_bars(query.ticker, start_date, end_date)
         if not bars:
             return []
+        # 若使用者指定較短區間（e.g. 7d），文件內容仍只呈現該區間的摘要
+        requested_start = end_date - timedelta(days=query.time_range_days)
+        window_bars = [b for b in bars if b.trading_date >= requested_start] or bars
         label = query.company_name or query.ticker
-        latest = bars[0]
-        earliest = bars[-1]
-        high_price = max(item.high_price for item in bars)
-        low_price = min(item.low_price for item in bars)
-        average_close = sum(item.close_price for item in bars) / len(bars)
+        latest = window_bars[0]
+        earliest = window_bars[-1]
+        high_price = max(item.high_price for item in window_bars)
+        low_price = min(item.low_price for item in window_bars)
+        average_close = sum(item.close_price for item in window_bars) / len(window_bars)
         change = latest.close_price - earliest.close_price
-        url = self._build_finmind_url("TaiwanStockPrice", query.ticker, start_date, end_date)
+        actual_days = query.time_range_days if window_bars is not bars else fetch_days
+        url = self._build_finmind_url("TaiwanStockPrice", query.ticker, requested_start, end_date)
         return [
             Document(
                 id=str(uuid5(NAMESPACE_URL, f"{url}:range")),
                 ticker=query.ticker,
-                title=f"{label} \u8fd1 {query.time_range_days} \u5929\u80a1\u50f9\u5340\u9593",
+                title=f"{label} \u8fd1 {actual_days} \u5929\u80a1\u50f9\u5340\u9593",
                 content=(
-                    f"\u6839\u64da FinMind TaiwanStockPrice {start_date.isoformat()} \u81f3 {end_date.isoformat()} \u8cc7\u6599\uff0c"
-                    f"{label} \u8fd1 {query.time_range_days} \u5929\u6700\u9ad8\u50f9\u70ba {high_price:.2f} \u5143\uff0c"
+                    f"\u6839\u64da FinMind TaiwanStockPrice {requested_start.isoformat()} \u81f3 {end_date.isoformat()} \u8cc7\u6599\uff0c"
+                    f"{label} \u8fd1 {actual_days} \u5929\u6700\u9ad8\u50f9\u70ba {high_price:.2f} \u5143\uff0c"
                     f"\u6700\u4f4e\u50f9\u70ba {low_price:.2f} \u5143\u3002"
                 ),
                 source_name="FinMind TaiwanStockPrice",
@@ -977,10 +1013,10 @@ class FinMindPostgresGateway:
             Document(
                 id=str(uuid5(NAMESPACE_URL, f"{url}:summary")),
                 ticker=query.ticker,
-                title=f"{label} \u8fd1 {query.time_range_days} \u5929\u50f9\u683c\u6458\u8981",
+                title=f"{label} \u8fd1 {actual_days} \u5929\u50f9\u683c\u6458\u8981",
                 content=(
                     f"\u6700\u65b0\u4ea4\u6613\u65e5 {latest.trading_date:%Y-%m-%d} \u6536\u76e4\u50f9\u7d04 {latest.close_price:.2f} \u5143\u3002"
-                    f"\u8fd1 {query.time_range_days} \u5929\u5e73\u5747\u6536\u76e4\u50f9\u7d04 {average_close:.2f} \u5143\uff0c"
+                    f"\u8fd1 {actual_days} \u5929\u5e73\u5747\u6536\u76e4\u50f9\u7d04 {average_close:.2f} \u5143\uff0c"
                     f"\u671f\u9593\u6536\u76e4\u8b8a\u52d5\u7d04 {change:.2f} \u5143\u3002"
                 ),
                 source_name="FinMind TaiwanStockPrice",
@@ -3636,6 +3672,33 @@ class FinMindPostgresGateway:
         return {SourceTier.HIGH: 3, SourceTier.MEDIUM: 2, SourceTier.LOW: 1}[tier]
 
     def _resolve_retrieval_profile(self, query: StructuredQuery) -> RetrievalProfile:
+        # P2 Integration：由 PolicyRegistry 優先查找 retrieval_profile_key。
+        #
+        # routing 主軸：intent + topic_tags（不依賴 question_type）。
+        # 這與 Phase 3 目標一致：InputLayer 只做 intent 分類，routing 由 tags 決定。
+        #
+        # 只有 Registry 回傳「有具體 topic_tags 的 policy」時才採用其 profile_key，
+        # 代表 Registry 找到了精確的 tag-based 匹配。
+        # 若 Registry 退到通用 fallback（topic_tags 為空）或 profile_key 不存在，
+        # 則繼續執行下方的原有 intent + tag if-elif 邏輯（等效但更細緻的條件）。
+        #
+        # 雙重保險設計：
+        #   - Registry 有 tag 匹配 → 直接使用，語意最明確
+        #   - Registry 無 tag 匹配 OR 失敗 → fallback 到現有 if-elif（行為不變）
+        try:
+            from llm_stock_system.core.query_policy import get_policy_registry
+            _policy = get_policy_registry().resolve_by_tags(
+                query.intent, query.topic_tags or []
+            )
+            # 只有 Registry 找到有 topic_tags 的具體 policy 才信任其結果；
+            # 若退到通用 fallback（topic_tags 為空），則交由下方 if-elif 處理更細緻的條件。
+            if _policy.topic_tags:
+                _profile = RETRIEVAL_PROFILES.get(_policy.retrieval_profile_key)
+                if _profile is not None:
+                    return _profile
+        except Exception:
+            pass  # Registry 失敗時靜默 fallback 到現有邏輯
+
         tags = set(query.topic_tags or [])
         user_query = query.user_query or ""
         intent = query.intent
@@ -4660,8 +4723,123 @@ class PostgresMarketDocumentRepository(DocumentRepository):
         self._gateway = gateway
 
     def upsert_documents(self, documents: list[Document]) -> int:
-        _ = documents
-        return 0
+        """將 Document 物件批次寫入（或更新）documents 表。
+
+        衝突策略：ON CONFLICT (url) DO UPDATE
+        - url 是 documents 表的 UNIQUE key，代表同一篇文章
+        - 若 url 已存在，更新 title / content / is_valid / updated_at
+        - 回傳實際 upsert 的筆數
+        """
+        if not documents:
+            return 0
+
+        from sqlalchemy import text
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc)
+
+        sql = text(
+            """
+            INSERT INTO documents (
+                id, ticker, title, summary_raw, content_raw, content_clean,
+                source_name, source_tier, source_type, url,
+                author, published_at, fetched_at,
+                topic_tags, is_valid, is_superseded,
+                created_at, updated_at
+            ) VALUES (
+                :id, :ticker, :title, :summary_raw, :content_raw, :content_clean,
+                :source_name, :source_tier, :source_type, :url,
+                :author, :published_at, :fetched_at,
+                :topic_tags, :is_valid, FALSE,
+                :created_at, :updated_at
+            )
+            ON CONFLICT (url) DO UPDATE SET
+                id           = EXCLUDED.id,
+                title        = EXCLUDED.title,
+                content_raw  = EXCLUDED.content_raw,
+                content_clean= EXCLUDED.content_clean,
+                is_valid     = EXCLUDED.is_valid,
+                updated_at   = EXCLUDED.updated_at
+            """
+        )
+
+        rows = []
+        for doc in documents:
+            rows.append({
+                "id": doc.id,
+                "ticker": doc.ticker,
+                "title": doc.title,
+                "summary_raw": None,
+                "content_raw": doc.content,
+                "content_clean": doc.content,
+                "source_name": doc.source_name,
+                "source_tier": doc.source_tier.value,
+                "source_type": doc.source_type,
+                "url": doc.url,
+                "author": doc.author,
+                "published_at": doc.published_at,
+                "fetched_at": now,
+                "topic_tags": [t.value for t in doc.topics],
+                "is_valid": doc.is_valid,
+                "created_at": now,
+                "updated_at": now,
+            })
+
+        try:
+            with self._gateway._engine.begin() as conn:
+                conn.execute(sql, rows)
+            return len(rows)
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning(
+                "upsert_documents 失敗（%d 篇）：%s", len(documents), exc
+            )
+            return 0
+
+    def get_documents_by_ids(self, doc_ids: list[str]) -> list[Document]:
+        """依 document ID 列表從 documents 表補查完整 Document 物件。
+        供 HybridRetrievalLayer._fetch_documents_by_ids() 使用。
+        """
+        if not doc_ids:
+            return []
+
+        from sqlalchemy import text
+
+        sql = text(
+            """
+            SELECT id, ticker, title, content_clean,
+                   source_name, source_type, source_tier,
+                   url, author, published_at, is_valid
+            FROM documents
+            WHERE id = ANY(:ids)
+              AND is_valid = TRUE
+            """
+        )
+        try:
+            with self._gateway._engine.connect() as conn:
+                rows = conn.execute(sql, {"ids": [str(d) for d in doc_ids]}).fetchall()
+        except Exception:
+            return []
+
+        result = []
+        for row in rows:
+            try:
+                result.append(Document(
+                    id=str(row[0]),
+                    ticker=row[1],
+                    title=row[2],
+                    content=row[3] or "",
+                    source_name=row[4],
+                    source_type=row[5],
+                    source_tier=row[6],
+                    url=row[7],
+                    author=row[8],
+                    published_at=row[9],
+                    is_valid=row[10],
+                ))
+            except Exception:
+                continue
+        return result
 
     def search_documents(self, query: StructuredQuery) -> list[Document]:
         return self._gateway.build_documents(query)

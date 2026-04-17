@@ -569,23 +569,4 @@ VALIDATION_PROFILES: dict[Intent, ValidationProfile] = {
                                 "Season line and margin review: missing one of price or margin evidence."
                             ),
                         },
-                    ),
-                ),
-            ),
-        ),
-    ),
-    Intent.INVESTMENT_ASSESSMENT: ValidationProfile(
-        intent=Intent.INVESTMENT_ASSESSMENT,
-        tag_rules=(
-            TagConditionRule(
-                required_tags=frozenset({TAG_INVESTMENT_ASSESSMENT}),
-                custom_validator=_validate_fundamental_valuation,
-            ),
-        ),
-    ),
-}
-
-
-def get_profile(intent: Intent) -> ValidationProfile | None:
-    """Return the profile for *intent*, or ``None`` if not registered."""
-    return VALIDATION_PROFILES.get(intent)
+   

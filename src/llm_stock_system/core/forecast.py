@@ -391,9 +391,4 @@ def apply_forecast_guardrail(summary: str, forecast: ForecastBlock) -> str:
 
 
 def apply_forecast_guardrail_to_list(items: list[str], forecast: ForecastBlock) -> list[str]:
-    """Apply number cross-check guardrail to a list of highlight/fact strings."""
-    allowed = _collect_allowed_numbers(forecast)
-    if not allowed and forecast.scenario_range is None:
-        # No reference numbers: strip all prediction-style price numbers
-        return [_sanitize_fabricated_numbers(item, forecast) for item in items]
-    return [_sanitize_fabricated_numbers(item, forecast) for item in items]
+    """Apply number cro

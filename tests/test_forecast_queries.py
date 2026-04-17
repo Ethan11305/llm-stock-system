@@ -899,28 +899,4 @@ class PriceSourceExtractionUnitTestCase(unittest.TestCase):
         evidence = make_evidence(
             "台積電收盤",
             "2026-04-16 台積電收盤 1760 元，成交量 30000 張",
-            source_name="TaiwanStockPrice",
-        )
-        report = make_report(evidence)
-
-        block = build_forecast_block(query, report)
-        # Only one price value (1760), can't form a range
-        self.assertIsNone(block.scenario_range)
-
-    def test_bare_numbers_without_unit_ignored(self) -> None:
-        """Numbers without 元/塊 in price source should be ignored."""
-        query = make_forecast_query("這週台積電預估區間？")
-        evidence = make_evidence(
-            "台積電交易明細",
-            "日期 20260416 成交量 45000 張，外資買超 2300 張，融資餘額 15000 張",
-            source_name="TaiwanStockPrice",
-        )
-        report = make_report(evidence)
-
-        block = build_forecast_block(query, report)
-        # No price-unit numbers → no range
-        self.assertIsNone(block.scenario_range)
-
-
-if __name__ == "__main__":
-    unittest.main()
+            sour

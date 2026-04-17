@@ -31,17 +31,4 @@ class TopicTagCoverageTestCase(unittest.TestCase):
         )
 
         self.assertIn(TopicTag.GROSS_MARGIN, query.controlled_tags)
-        self.assertIn("毛利率", query.topic_tags)
-        self.assertIn("比較", query.topic_tags)
-        self.assertEqual(query.tag_source, "matched")
-
-    def test_investment_support_query_falls_back_to_free_keywords(self) -> None:
-        query = self.input_layer.parse(QueryRequest(query="台積電 2330 可以買嗎？"))
-
-        self.assertEqual(query.controlled_tags, [])
-        self.assertIn("投資評估", query.free_keywords)
-        self.assertEqual(query.tag_source, "fallback")
-
-
-if __name__ == "__main__":
-    unittest.main()
+        self.asse

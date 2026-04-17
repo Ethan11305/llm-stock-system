@@ -18,6 +18,8 @@ def healthcheck(request: Request) -> dict[str, object]:
         "lowConfidenceWarmupEnabled": getattr(request.app.state, "low_confidence_warmup_enabled", False),
         "newsPipelineEnabled": getattr(request.app.state, "news_pipeline_enabled", False),
         "newsProviders": getattr(request.app.state, "news_provider_names", []),
+        "embeddingEnabled": getattr(request.app.state, "embedding_enabled", False),
+        "retrievalMode": "hybrid" if getattr(request.app.state, "embedding_enabled", False) else "metadata_only",
     }
 
 

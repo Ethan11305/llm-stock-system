@@ -8,6 +8,11 @@ services:
       POSTGRES_PASSWORD: postgres
     ports:
       - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d llm_stock"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./db/sql:/docker-entrypoint-initdb.d
@@ -16,17 +21,9 @@ services:
     image: python:3.12-slim
     container_name: llm-stock-api
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
     working_dir: /app
     command: >
       sh -c "pip install -e . &&
-      uvicorn llm_stock_system.api.app:create_app --host 0.0.0.0 --port 8000 --factory"
-    env_file:
-      - .env
-    ports:
-      - "8000:8000"
-    volumes:
-      - ./:/app
-
-volumes:
-  postgres_data:
+      uvicorn llm_stock_system.

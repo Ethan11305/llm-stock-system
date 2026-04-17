@@ -1,3 +1,5 @@
+import logging
+
 from llm_stock_system.core.interfaces import QueryHydrator, QueryLogStore
 from llm_stock_system.core.models import HydrationResult, QueryRequest, QueryResponse, SourceResponse
 from llm_stock_system.layers.data_governance_layer import DataGovernanceLayer
@@ -6,6 +8,8 @@ from llm_stock_system.layers.input_layer import InputLayer
 from llm_stock_system.layers.presentation_layer import PresentationLayer
 from llm_stock_system.layers.retrieval_layer import RetrievalLayer
 from llm_stock_system.layers.validation_layer import ValidationLayer
+
+logger = logging.getLogger(__name__)
 
 
 class QueryPipeline:
@@ -37,8 +41,16 @@ class QueryPipeline:
                 candidate_result = self._query_hydrator.hydrate(structured_query)
                 if isinstance(candidate_result, HydrationResult):
                     hydration_result = candidate_result
-            except Exception:
-                pass
+            except Exception as exc:
+                # 記錄完整 traceback，讓 thread-pool 帶來的失敗可被追蹤
+                # 主流程繼續執行，但 hydration_result 保持為空（等同資料缺失）
+                logger.error(
+                    "QueryPipeline: hydration 失敗（ticker=%s, intent=%s）：%s",
+                    getattr(structured_query, "ticker", None),
+                    getattr(structured_query, "intent", None),
+                    exc,
+                    exc_info=True,
+                )
         retrieved_documents = self._retrieval_layer.retrieve(structured_query)
         governance_report = self._data_governance_layer.curate(structured_query, retrieved_documents)
         answer_draft = self._generation_layer.generate(structured_query, governance_report)
@@ -65,6 +77,11 @@ class QueryPipeline:
         if callable(follow_up_scheduler):
             try:
                 follow_up_scheduler(structured_query, validation_result)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(
+                    "QueryPipeline: schedule_follow_up 失敗（ticker=%s）：%s",
+                    getattr(structured_query, "ticker", None),
+                    exc,
+                    exc_info=True,
+                )
         return response

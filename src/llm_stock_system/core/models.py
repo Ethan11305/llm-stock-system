@@ -84,6 +84,21 @@ QUESTION_TYPE_FALLBACK_TOPIC_TAGS: dict[str, tuple[str, ...]] = {
     "investment_support":               ("投資評估", "基本面", "本益比"),
     "risk_review":                      ("風險",),
     "announcement_summary":             ("公告",),
+
+    # ── 新增 question_type fallback（對應新分類）──
+    "profitability_review":             ("獲利能力", "ROE"),
+    "operating_efficiency_review":      ("營運效率", "存貨週轉"),
+    "capex_rd_review":                  ("資本支出", "研發"),
+    "institutional_flow_review":        ("外資", "投信"),
+    "competitive_review":               ("競爭優勢", "市佔率"),
+    "supply_chain_review":              ("供應鏈", "供應商"),
+    "esg_review":                       ("ESG", "永續"),
+    "regulatory_review":                ("政策", "監管"),
+    "event_review":                     ("併購", "重大事件"),
+    "index_rebal_review":               ("MSCI", "指數調整"),
+    "fx_impact_review":                 ("匯率", "匯損"),
+    "sentiment_review":                 ("市場情緒", "VIX"),
+    "risk_mgmt_review":                 ("停損", "風險管理"),
 }
 
 
