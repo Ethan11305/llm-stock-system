@@ -413,4 +413,14 @@ class OpenAIResponsesSynthesisClient(LLMClient):
         guarded["facts"] = build_fundamental_valuation_facts(query, governance_report)
         return guarded
 
-    def _coerce_list(
+    def _coerce_list(self, value) -> list[str]:
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+        if isinstance(value, str) and value.strip():
+            return [value.strip()]
+        return []
+
+    def _coerce_string(self, value, default: str) -> str:
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        return default

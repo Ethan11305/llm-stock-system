@@ -1,0 +1,153 @@
+╔════════════════════════════════════════════════════════════════════════════╗
+║             P0 Schema Migration 快速參考卡 (5 分鐘版本)                     ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+📋 執行步驟
+───────────────────────────────────────────────────────────────────────────────
+
+【方式 1：一鍵執行（推薦）】
+
+    $ bash scripts/execute_schema_migration.sh
+
+    這個腳本會自動執行：
+    ✓ 備份資料庫
+    ✓ 執行 Schema Migration
+    ✓ 驗證結果
+
+    預期工時：5-15 分鐘
+
+
+【方式 2：手動執行】
+
+    # Step 1：備份
+    $ pg_dump -U postgres -d llm_stock > backup_$(date +%Y%m%d_%H%M%S).sql
+
+    # Step 2：執行 migration
+    $ psql -U postgres -d llm_stock < db/sql/004_embedding_enhancements.sql
+
+    # Step 3：驗證
+    $ psql -U postgres -d llm_stock << 'EOF'
+    SELECT constraint_name FROM information_schema.table_constraints
+    WHERE table_name = 'document_embeddings' AND constraint_type = 'UNIQUE';
+    EOF
+
+
+【方式 3：分步執行（測試環境）】
+
+    # 僅備份
+    $ bash scripts/execute_schema_migration.sh --backup-only
+
+    # 僅驗證
+    $ bash scripts/execute_schema_migration.sh --verify-only
+
+
+═════════════════════════════════════════════════════════════════════════════════
+
+✅ 驗證成功的標誌
+───────────────────────────────────────────────────────────────────────────────
+
+migration 執行後，檢查以下內容是否全部出現「✓」：
+
+    ✓ UNIQUE constraint (document_id, chunk_index)
+    ✓ Metadata 欄位 (ticker, published_at)
+    ✓ HNSW 索引
+
+檢查指令：
+    $ psql -U postgres -d llm_stock -c "\d document_embeddings"
+
+預期結果：
+    - Indexes 中應出現：
+      * uq_document_embeddings_doc_chunk
+      * idx_doc_embeddings_ticker
+      * idx_doc_embeddings_published_at
+      * idx_document_embeddings_hnsw
+
+
+═════════════════════════════════════════════════════════════════════════════════
+
+⚠️  常見問題快速排查
+───────────────────────────────────────────────────────────────────────────────
+
+問題：ERROR: type "vector" does not exist
+解決：pgvector 未安裝
+      → 執行 001_extensions.sql 或 CREATE EXTENSION vector;
+
+問題：ERROR: permission denied
+解決：帳戶權限不足
+      → 使用 postgres 帳戶（superuser）執行
+
+問題：constraint already exists
+解決：這是正常的 - SQL 已設計成冪等（可重複執行）
+      → 直接重新執行腳本即可
+
+問題：執行超過 1 分鐘都沒完成
+解決：這很正常 - HNSW 索引建立需要時間
+      → 等待完成（通常 5-15 分鐘）
+
+
+═════════════════════════════════════════════════════════════════════════════════
+
+📊 遷移涉及的變更
+───────────────────────────────────────────────────────────────────────────────
+
+1. 新增 UNIQUE constraint
+   ├─ constraint name: uq_document_embeddings_doc_chunk
+   ├─ 欄位: (document_id, chunk_index)
+   └─ 用途: 支援 embedding_service 的 upsert 邏輯
+
+2. 新增 Metadata 欄位
+   ├─ ticker (VARCHAR 16)
+   ├─ published_at (TIMESTAMP)
+   └─ 用途: 快速篩選，避免 JOIN documents 表
+
+3. 升級向量索引
+   ├─ 舊: idx_document_embeddings_ivfflat (IVFFlat)
+   ├─ 新: idx_document_embeddings_hnsw (HNSW)
+   ├─ 參數: m=16, ef_construction=64
+   └─ 用途: 更穩定的查詢延遲
+
+
+═════════════════════════════════════════════════════════════════════════════════
+
+🚀 完成後的下一步
+───────────────────────────────────────────────────────────────────────────────
+
+【立即執行】
+    $ python scripts/backfill_embeddings.py --dry-run      # 預檢
+    $ python scripts/backfill_embeddings.py --batch-size 50 # 回填
+
+【驗證效果】
+    使用以下查詢測試語義搜索是否有效：
+    - 「台積電供應鏈風險」
+    - 「航運類股最近利空」
+    - 「本益比相對低」
+
+【監控性能】
+    観察系統運行，確認沒有異常
+
+
+═════════════════════════════════════════════════════════════════════════════════
+
+📞 需要幫助？
+───────────────────────────────────────────────────────────────────────────────
+
+查詳細指南：
+    $ cat SCHEMA_MIGRATION_GUIDE.md
+
+查 Migration 狀態：
+    $ P0_IMPLEMENTATION_STATUS.md
+
+排查技巧：
+    1. 檢查 PostgreSQL 連接
+       $ psql -U postgres -c "SELECT version();"
+
+    2. 檢查 pgvector 版本
+       $ psql -U postgres -d llm_stock -c "SELECT extversion FROM pg_extension WHERE extname='vector';"
+
+    3. 檢查資料庫大小
+       $ psql -U postgres -d llm_stock -c "SELECT pg_size_pretty(pg_database_size('llm_stock'));"
+
+
+═════════════════════════════════════════════════════════════════════════════════
+最後更新：2026-04-17 | 預期工時：5-15 分鐘
+═════════════════════════════════════════════════════════════════════════════════

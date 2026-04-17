@@ -26,4 +26,18 @@ services:
     working_dir: /app
     command: >
       sh -c "pip install -e . &&
-      uvicorn llm_stock_system.
+      uvicorn llm_stock_system.api.app:create_app --host 0.0.0.0 --port 8000 --factory"
+    env_file:
+      - .env
+    environment:
+      # Inside Docker, the API must connect to the postgres service, not localhost.
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/llm_stock
+      # During P0 verification, fail loudly instead of silently falling back to sample data.
+      FALLBACK_TO_SAMPLE_DATA: "false"
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./:/app
+
+volumes:
+  postgres_data:

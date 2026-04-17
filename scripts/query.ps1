@@ -137,4 +137,8 @@ if ($null -ne $response.forecast) {
     Write-Host "Mode: $($fc.mode)"
 }
 
-Wri
+Write-Host ""
+Write-Host "Sources API:"
+Write-Host "$BaseUrl/api/sources/$($response.query_id)"
+Write-Host ""
+Write-Host $response.disclaimer

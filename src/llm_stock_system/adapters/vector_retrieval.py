@@ -139,4 +139,10 @@ class VectorRetrievalAdapter:
                 chunk_text=row[1],
                 chunk_index=int(row[2]),
                 similarity_score=float(row[3]),
-                ticker
+                ticker=row[4],
+                title=row[5],
+                source_tier=row[6],
+                published_at=str(row[7]) if row[7] else None,
+            )
+            for row in rows
+        ]

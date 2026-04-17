@@ -1,0 +1,244 @@
+╔═══════════════════════════════════════════════════════════════════════════╗
+║             Windows 快速開始 - P0 Schema Migration                        ║
+╚═══════════════════════════════════════════════════════════════════════════╝
+
+🚀 5 分鐘快速執行
+───────────────────────────────────────────────────────────────────────────
+
+在 PowerShell 中執行以下命令：
+
+# 方式 1：PowerShell 腳本（推薦）
+.\execute_schema_migration.ps1
+
+# 方式 2：直接 Python
+python << 'EOF'
+from sqlalchemy import create_engine, text
+
+engine = create_engine('postgresql+psycopg://postgres:postgres@localhost:5432/llm_stock')
+
+with open('db/sql/004_embedding_enhancements.sql', 'r', encoding='utf-8') as f:
+    sql = f.read()
+
+with engine.begin() as conn:
+    for stmt in [s.strip() for s in sql.split(';') if s.strip() and not s.startswith('--')]:
+        try:
+            conn.execute(text(stmt))
+        except:
+            pass
+
+print("[✓] Migration 完成")
+EOF
+
+
+═══════════════════════════════════════════════════════════════════════════
+
+📋 三個步驟完成
+───────────────────────────────────────────────────────────────────────────
+
+【步驟 1：驗證環境】（1 分鐘）
+
+    # 檢查 Python
+    python --version
+
+    # 檢查 PostgreSQL（如有）
+    psql --version
+
+    # 檢查必要的 Python 模組
+    python -c "import psycopg; print('psycopg 已安裝')"
+
+
+【步驟 2：執行 Migration】（1-2 分鐘）
+
+    # 進入專案目錄
+    cd C:\path\to\LLM理財
+
+    # 執行 migration（選一種）
+
+    # 選項 A：用 PowerShell 腳本（最簡單）
+    .\execute_schema_migration.ps1
+
+    # 選項 B：直接 Python（如腳本失敗）
+    python << 'EOF'
+    from sqlalchemy import create_engine, text
+
+    engine = create_engine('postgresql+psycopg://postgres:postgres@localhost:5432/llm_stock')
+    with open('db/sql/004_embedding_enhancements.sql', 'r', encoding='utf-8') as f:
+        sql = f.read()
+
+    with engine.begin() as conn:
+        for stmt in [s.strip() for s in sql.split(';') if s.strip() and not s.startswith('--')]:
+            try:
+                conn.execute(text(stmt))
+            except:
+                pass
+
+    print("[✓] Migration 完成")
+    EOF
+
+
+【步驟 3：驗證成功】（1 分鐘）
+
+    # 驗證 migration 成功
+    python << 'EOF'
+    from sqlalchemy import create_engine, text
+
+    engine = create_engine('postgresql+psycopg://postgres:postgres@localhost:5432/llm_stock')
+    with engine.connect() as conn:
+        # 檢查 HNSW 索引
+        result = conn.execute(text(
+            "SELECT indexname FROM pg_indexes WHERE tablename='document_embeddings' "
+            "AND indexname='idx_document_embeddings_hnsw'"
+        ))
+
+        if result.scalar():
+            print("[✓] HNSW 索引已建立 - Migration 成功！")
+        else:
+            print("[✗] Migration 可能失敗")
+    EOF
+
+
+═══════════════════════════════════════════════════════════════════════════
+
+⚠️  常見問題排查
+───────────────────────────────────────────────────────────────────────────
+
+問題 1：'psycopg' module not found
+解決：
+    pip install psycopg[binary]
+
+問題 2：PostgreSQL connection failed
+解決：
+    1. 檢查 PostgreSQL 是否正在運行（Windows 工作管理員 → 服務）
+    2. 檢查連接參數是否正確：
+       - Host: localhost 或 127.0.0.1
+       - Port: 5432 (預設)
+       - User: postgres
+       - Password: postgres (或您設定的密碼)
+
+問題 3：執行腳本出現編碼錯誤
+解決：
+    # 改成明確指定編碼
+    python -u << 'EOF'
+    # ... 上面的 Python 程式碼 ...
+    EOF
+
+問題 4：PowerShell 腳本執行權限不足
+解決：
+    # 允許執行本地腳本
+    Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+
+問題 5：\"cannot find module 'sqlalchemy'\"
+解決：
+    pip install sqlalchemy
+
+
+═══════════════════════════════════════════════════════════════════════════
+
+✅ 成功的標誌
+───────────────────────────────────────────────────────────────────────────
+
+執行完畢後，應該看到：
+
+    [✓] HNSW 索引已建立 - Migration 成功！
+
+或在驗證步驟中看到：
+
+    [✓] UNIQUE constraint
+    [✓] Metadata columns
+    [✓] HNSW index
+
+
+═══════════════════════════════════════════════════════════════════════════
+
+📊 下一步工作
+───────────────────────────────────────────────────────────────────────────
+
+【2-3 分鐘】回填 embeddings（如有歷史文件）
+
+    python scripts/backfill_embeddings.py --dry-run
+    python scripts/backfill_embeddings.py --batch-size 50
+
+
+【15-30 分鐘】手工測試查詢效果
+
+    - 「台積電供應鏈風險」
+    - 「航運類股最近利空」
+    - 「本益比相對低」
+
+    對比 metadata-only 檢索 vs hybrid 檢索的差異
+
+
+【1-2 小時】更新文件（可稍後進行）
+
+    - docs/architecture.md
+    - 架構缺口分析文件.md
+
+
+═══════════════════════════════════════════════════════════════════════════
+
+💡 PowerShell 腳本選項
+───────────────────────────────────────────────────────────────────────────
+
+    # 完整執行（預設）
+    .\execute_schema_migration.ps1
+
+    # 僅執行 migration（跳過驗證）
+    .\execute_schema_migration.ps1 -Mode migrate-only
+
+    # 僅驗證（跳過 migration）
+    .\execute_schema_migration.ps1 -Mode verify-only
+
+    # 自訂資料庫連接
+    .\execute_schema_migration.ps1 -DbHost 192.168.1.100 -DbPort 5433
+
+
+═══════════════════════════════════════════════════════════════════════════
+
+📞 需要幫助？
+───────────────────────────────────────────────────────────────────────────
+
+詳細指南：
+    cat SCHEMA_MIGRATION_WINDOWS.md
+
+快速參考卡：
+    cat SCHEMA_MIGRATION_QUICK_REFERENCE.txt
+
+完整資源列表：
+    cat SCHEMA_MIGRATION_INDEX.md
+
+
+═══════════════════════════════════════════════════════════════════════════
+
+🎯 立即執行
+───────────────────────────────────────────────────────────────────────────
+
+# 在 PowerShell 中複製貼上以下命令
+
+cd C:\path\to\LLM理財
+.\execute_schema_migration.ps1
+
+# 或者直接執行 Python
+
+python << 'EOF'
+from sqlalchemy import create_engine, text
+
+engine = create_engine('postgresql+psycopg://postgres:postgres@localhost:5432/llm_stock')
+
+with open('db/sql/004_embedding_enhancements.sql', 'r', encoding='utf-8') as f:
+    sql = f.read()
+
+with engine.begin() as conn:
+    for stmt in [s.strip() for s in sql.split(';') if s.strip() and not s.startswith('--')]:
+        try:
+            conn.execute(text(stmt))
+        except Exception as e:
+            if 'already exists' not in str(e).lower():
+                print(f"Warning: {e}")
+
+print("[✓] Migration 完成！")
+EOF
+
+
+═══════════════════════════════════════════════════════════════════════════
+最後更新：2026-04-17 | Windows PowerShell
+═══════════════════════════════════════════════════════════════════════════

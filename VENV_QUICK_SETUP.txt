@@ -1,0 +1,212 @@
+╔═══════════════════════════════════════════════════════════════════════════╗
+║         Windows 虛擬環境 + Migration 一鍵執行                            ║
+╚═══════════════════════════════════════════════════════════════════════════╝
+
+⚡ 5 分鐘快速開始
+───────────────────────────────────────────────────────────────────────────
+
+【第 1 步：進入專案目錄】
+
+在 PowerShell 中執行：
+
+    cd C:\path\to\LLM理財
+
+確認出現正確的目錄路徑。
+
+
+【第 2 步：建立 + 激活虛擬環境 + 安裝依賴 + 執行 Migration】
+
+複製以下整個代碼塊，直接在 PowerShell 中執行（一次性）：
+
+═══════════════════════════════════════════════════════════════════════════
+
+# 第一部分：建立和激活虛擬環境
+
+echo "[1] 建立虛擬環境..."
+python -m venv venv
+
+echo "[2] 允許運行腳本..."
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser -Force
+
+echo "[3] 激活虛擬環境..."
+.\venv\Scripts\Activate.ps1
+
+echo "[4] 升級 pip..."
+python -m pip install --upgrade pip
+
+echo "[5] 安裝依賴..."
+pip install sqlalchemy psycopg[binary]
+
+echo "[✓] 虛擬環境準備完成！"
+
+# 第二部分：執行 Migration
+
+python << 'EOF'
+from sqlalchemy import create_engine, text
+
+print("\n" + "="*70)
+print("  P0 Schema Migration")
+print("="*70)
+
+engine = create_engine('postgresql+psycopg://postgres:postgres@localhost:5432/llm_stock')
+
+print("\n[1] 連接資料庫...")
+try:
+    with engine.connect() as conn:
+        conn.execute(text('SELECT 1'))
+    print("[✓] 連接成功")
+except Exception as e:
+    print(f"[✗] 連接失敗：{e}")
+    exit(1)
+
+print("\n[2] 讀取 SQL 檔案...")
+try:
+    with open('db/sql/004_embedding_enhancements.sql', 'r', encoding='utf-8') as f:
+        sql = f.read()
+    print("[✓] 讀取成功")
+except Exception as e:
+    print(f"[✗] 讀取失敗：{e}")
+    exit(1)
+
+print("\n[3] 執行 Migration...")
+statements = [s.strip() for s in sql.split(';') if s.strip() and not s.startswith('--')]
+
+with engine.begin() as conn:
+    for i, stmt in enumerate(statements, 1):
+        try:
+            conn.execute(text(stmt))
+            print(f"   ✓ 語句 {i}/{len(statements)}")
+        except Exception as e:
+            if 'already exists' in str(e).lower():
+                print(f"   ! 語句 {i}/{len(statements)} (已存在，跳過)")
+            else:
+                raise
+
+print("\n[4] 驗證結果...")
+checks = {
+    'UNIQUE constraint': "SELECT COUNT(*) FROM information_schema.table_constraints WHERE table_name='document_embeddings' AND constraint_type='UNIQUE'",
+    'Metadata 欄位': "SELECT COUNT(*) FROM information_schema.columns WHERE table_name='document_embeddings' AND column_name IN ('ticker', 'published_at')",
+    'HNSW 索引': "SELECT COUNT(*) FROM pg_indexes WHERE tablename='document_embeddings' AND indexname='idx_document_embeddings_hnsw'"
+}
+
+with engine.connect() as conn:
+    for check_name, query in checks.items():
+        result = conn.execute(text(query))
+        count = result.scalar()
+        status = "✓" if (count > 0 if check_name != 'Metadata 欄位' else count == 2) else "✗"
+        print(f"   {status} {check_name}")
+
+print("\n" + "="*70)
+print("  ✓ Migration 完成！")
+print("="*70)
+
+EOF
+
+═══════════════════════════════════════════════════════════════════════════
+
+
+【成功的標誌】
+
+應該看到輸出：
+
+    [✓] 連接成功
+    [✓] 讀取成功
+    [✓] 語句 1/...
+    [✓] 語句 2/...
+    ...
+    [✓] UNIQUE constraint
+    [✓] Metadata 欄位
+    [✓] HNSW 索引
+    ✓ Migration 完成！
+
+
+═══════════════════════════════════════════════════════════════════════════
+
+❌ 如果出現錯誤
+───────────────────────────────────────────────────────────────────────────
+
+【錯誤 1：執行策略錯誤】
+
+    UnauthorizedAccess : 無法載入指令碼 ...
+
+解決：
+    Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+
+
+【錯誤 2：找不到 Python】
+
+    python : 詞彙 'python' 無法辨識
+
+解決：
+    1. 確認 Python 已安裝：python --version
+    2. 重啟 PowerShell
+    3. 使用完整路徑：C:\Python311\python.exe
+
+
+【錯誤 3：psycopg 未安裝】
+
+    ModuleNotFoundError: No module named 'psycopg'
+
+解決：
+    pip install psycopg[binary]
+
+
+【錯誤 4：資料庫連接失敗】
+
+    sqlalchemy.exc.OperationalError: could not connect to server
+
+解決：
+    1. 檢查 PostgreSQL 是否運行
+    2. 檢查密碼是否正確（預設：postgres）
+    3. 檢查連接參數：localhost:5432
+
+
+═══════════════════════════════════════════════════════════════════════════
+
+💡 如果一鍵執行有問題，逐步執行
+───────────────────────────────────────────────────────────────────────────
+
+# Step 1：建立虛擬環境
+python -m venv venv
+
+# Step 2：激活
+.\venv\Scripts\Activate.ps1
+
+# Step 3：安裝
+pip install sqlalchemy psycopg[binary]
+
+# Step 4：驗證安裝
+pip list
+
+# Step 5：執行 migration（複製上面「第二部分」的 Python 代碼）
+
+
+═══════════════════════════════════════════════════════════════════════════
+
+✅ 完成後的下一步
+───────────────────────────────────────────────────────────────────────────
+
+# 確保虛擬環境已激活（看到 (venv) 前綴）
+
+# 回填 embeddings（如有歷史文件）
+python scripts/backfill_embeddings.py --dry-run
+
+# 驗證效果
+python scripts/backfill_embeddings.py --batch-size 50
+
+
+═══════════════════════════════════════════════════════════════════════════
+
+📞 詳細指南
+───────────────────────────────────────────────────────────────────────────
+
+查看完整的虛擬環境設置指南：
+    type SETUP_WINDOWS_VENV.md
+
+查看 Schema Migration 的詳細指南：
+    type SCHEMA_MIGRATION_WINDOWS.md
+
+
+═══════════════════════════════════════════════════════════════════════════
+最後更新：2026-04-17 | Windows PowerShell
+═══════════════════════════════════════════════════════════════════════════
