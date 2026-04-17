@@ -3688,11 +3688,11 @@ class FinMindPostgresGateway:
         try:
             from llm_stock_system.core.query_policy import get_policy_registry
             _policy = get_policy_registry().resolve_by_tags(
-                query.intent, query.topic_tags or []
+                query.intent, query.controlled_tags or []
             )
-            # 只有 Registry 找到有 topic_tags 的具體 policy 才信任其結果；
-            # 若退到通用 fallback（topic_tags 為空），則交由下方 if-elif 處理更細緻的條件。
-            if _policy.topic_tags:
+            # 只有 Registry 透過 controlled_tags 明確命中（exact / partial）時才信任結果；
+            # generic / fallback 表示沒有 tag 依據，交由下方 if-elif 做更細緻的條件判斷。
+            if _policy.match_type in ("exact", "partial"):
                 _profile = RETRIEVAL_PROFILES.get(_policy.retrieval_profile_key)
                 if _profile is not None:
                     return _profile

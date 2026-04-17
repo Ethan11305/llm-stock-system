@@ -23,12 +23,12 @@
   - frozen dataclass：policy 是不可變配置，便於快取和測試
   - 全部 key 都是字串（不綁定具體 gateway 實作）
   - 失敗 fallback：resolve() / resolve_by_tags() 永遠回傳一個 policy，不會 raise
-  - routing 主軸：intent + topic_tags（不依賴 question_type）
+  - routing 主軸：intent + controlled_tags（不依賴 question_type，不混入 free_keywords）
 """
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from llm_stock_system.core.enums import DataFacet, Intent
 from llm_stock_system.core.models import INTENT_FACET_SPECS, QUESTION_TYPE_FALLBACK_TOPIC_TAGS, QUESTION_TYPE_TO_INTENT
@@ -65,6 +65,11 @@ class QueryPolicy:
     confidence_cap: float | None = None
     min_evidence_count: int = 1
     cove_eligible: bool = False   # P3 CoVe 用：財報類 + 數字型回答才啟用
+    match_type: str = "generic"   # 由 resolve_by_tags() 解析時設定，勿手動指定
+                                  # "exact"   → controlled_tags 全部命中某個 policy
+                                  # "partial" → controlled_tags 部分命中
+                                  # "generic" → 無 tag 匹配，退回 intent 通用 policy
+                                  # "fallback"→ intent 也找不到，退回全域預設
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -134,8 +139,8 @@ class PolicyRegistry:
 
     使用方式：
         registry = PolicyRegistry()
-        # ✅ 新方式（Phase 2+）：intent + tags routing
-        policy = registry.resolve_by_tags(intent=Intent.NEWS_DIGEST, topic_tags={"航運", "SCFI"})
+        # ✅ 新方式（Phase 2+）：intent + controlled_tags routing（只傳 TopicTag enum list）
+        policy = registry.resolve_by_tags(intent=Intent.NEWS_DIGEST, controlled_tags={"航運", "SCFI"})
         # → QueryPolicy(retrieval_profile_key="news_shipping", ...)
 
         # 遺留方式（question_type based）：
@@ -154,26 +159,35 @@ class PolicyRegistry:
     def resolve_by_tags(
         self,
         intent: Intent,
-        topic_tags: frozenset[str] | set[str] | tuple[str, ...] | list[str],
+        controlled_tags: frozenset | set | tuple | list,
     ) -> QueryPolicy:
-        """根據 intent + topic_tags 查找最匹配的 policy。
+        """根據 intent + controlled_tags 查找最匹配的 policy。
 
-        這是 Phase 2+ 的目標路由方式，完全不依賴 question_type。
+        規劃項目 A（已實作）：只吃 controlled_tags（TopicTag enum list），
+        不接受混合了 free_keywords / fallback_tags 的 topic_tags。
+        free_keywords 僅供 RetrievalLayer 展開搜尋用，不參與 routing。
 
         Matching 策略：
           1. 過濾出 policy.intent == intent 的所有 policy
-          2. 計算 query topic_tags 與每個 policy.topic_tags 的交集大小（tag overlap score）
-          3. 回傳 overlap score 最高的 policy（至少要有 1 個 tag 匹配）
-          4. 若無任何交集（例如空 tags 或通用查詢），fallback 到該 intent 的通用 policy
-             （topic_tags 最少的 policy，通常是 "market_summary" / generic 類型）
+          2. 將 controlled_tags 轉為 str frozenset（支援 TopicTag enum 或純字串）
+          3. 計算 query tag_set 與每個 policy.topic_tags 的交集大小（overlap score）
+          4. 回傳 overlap score 最高的 policy，並設定 match_type：
+             - "exact"    → score >= len(tag_set) > 0（全部 tag 都被某個 policy 涵蓋）
+             - "partial"  → 0 < score < len(tag_set)（部分命中）
+             - "generic"  → score == 0 或 tag_set 為空（退回 intent 的通用 policy）
+             - "fallback" → 連 intent 都找不到（退回全域預設）
           5. 若連 intent 也找不到，fallback 到 news_generic
 
         設計原則：
           - 不 raise：永遠回傳有效的 policy
           - 無狀態：tag matching 為純函式，可測試
-          - 與現有 _resolve_retrieval_profile() if-elif 邏輯語意對齊
+          - match_type 透過 dataclasses.replace() 設定在回傳的 policy 副本上
         """
-        tag_set = frozenset(topic_tags)
+        # 將 TopicTag enum 或純字串統一轉為 str frozenset
+        tag_set = frozenset(
+            t.value if hasattr(t, "value") else str(t)
+            for t in controlled_tags
+        )
 
         # 找出同 intent 的所有 policy
         candidates = [
@@ -187,7 +201,7 @@ class PolicyRegistry:
                 "PolicyRegistry.resolve_by_tags: 找不到 intent=%s 的 policy，使用 news_generic。",
                 intent.value,
             )
-            return self._default_policy()
+            return replace(self._default_policy(), match_type="fallback")
 
         # 計算每個 candidate 的 tag overlap score
         best_policy: QueryPolicy | None = None
@@ -203,14 +217,18 @@ class PolicyRegistry:
                 best_score = score
                 best_policy = policy
 
-        # 有明確 tag 匹配：回傳最佳匹配
+        # 有明確 tag 匹配：回傳最佳匹配，並標記 match_type
         if best_policy is not None and best_score > 0:
-            return best_policy
+            if best_score >= len(tag_set):
+                computed_match_type = "exact"
+            else:
+                computed_match_type = "partial"
+            return replace(best_policy, match_type=computed_match_type)
 
         # 無 tag 匹配（空 tags 或通用查詢）：回傳 intent 的通用 policy
         # 選 topic_tags 最少的，通常是 generic / market_summary 類型
         generic = min(candidates, key=lambda p: len(p.topic_tags))
-        return generic
+        return replace(generic, match_type="generic")
 
     def resolve(self, intent: Intent, question_type: str) -> QueryPolicy:
         """根據 intent + question_type 查找對應的 policy。

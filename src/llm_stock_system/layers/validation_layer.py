@@ -66,6 +66,11 @@ class ValidationLayer:
             confidence_score,
             warnings,
         )
+        confidence_score = self._apply_match_type_cap(
+            query,
+            confidence_score,
+            warnings,
+        )
         confidence_score = round(max(confidence_score, 0.0), 2)
 
         if confidence_score >= self._min_green_confidence:
@@ -151,7 +156,7 @@ class ValidationLayer:
         try:
             from llm_stock_system.core.query_policy import get_policy_registry
             policy = get_policy_registry().resolve_by_tags(
-                query.intent, query.topic_tags or []
+                query.intent, query.controlled_tags or []
             )
             min_count = policy.min_evidence_count
             actual_count = len(governance_report.evidence)
@@ -422,6 +427,52 @@ class ValidationLayer:
             confidence_score,
             warnings,
         )
+
+    def _apply_match_type_cap(
+        self,
+        query: StructuredQuery,
+        confidence_score: float,
+        warnings: list[str],
+    ) -> float:
+        """規劃項目 B：根據 policy_match_type 調整信心分上限。
+
+        routing 品質直接影響回答的可靠度：
+          - "fallback" → policy 完全預設，路由沒有語意依據，信心分上限 0.72（YELLOW）
+          - "generic"  → intent 命中但 tag 未匹配，稍微保守，上限 0.78（YELLOW 上緣）
+          - "partial"  → 部分 tag 命中，不調整
+          - "exact"    → 全部 tag 命中，不調整
+
+        使用 controlled_tags 路由（不混 free_keywords），與規劃項目 A 的改動一致。
+
+        注意：若 controlled_tags 為空，代表本次查詢沒有可路由的 enum tag，
+        無法判斷路由品質，故直接跳過不調整。
+        """
+        if not query.controlled_tags:
+            return confidence_score
+        try:
+            from llm_stock_system.core.query_policy import get_policy_registry
+            policy = get_policy_registry().resolve_by_tags(
+                query.intent, query.controlled_tags or []
+            )
+            match_type = policy.match_type
+            if match_type == "fallback":
+                cap = 0.72
+                if confidence_score > cap:
+                    confidence_score = cap
+                    warnings.append(
+                        "路由退回全域預設（policy fallback），信心分上限壓至 0.72。"
+                    )
+            elif match_type == "generic":
+                cap = 0.78
+                if confidence_score > cap:
+                    confidence_score = cap
+                    warnings.append(
+                        "查詢未命中任何具體 policy（generic routing），信心分上限壓至 0.78。"
+                    )
+            # "partial" 和 "exact" 不調整
+        except Exception:
+            pass  # Registry 不可用時靜默忽略
+        return confidence_score
 
     # --- Helper methods ---
 
