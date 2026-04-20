@@ -1,11 +1,12 @@
 from uuid import uuid4
 
-from llm_stock_system.core.enums import ConfidenceLight
+from llm_stock_system.core.enums import ConfidenceLight, QueryProfile
 from llm_stock_system.core.models import (
     AnswerDraft,
     DataStatus,
     GovernanceReport,
     QueryResponse,
+    StructuredQuery,
     ValidationResult,
 )
 
@@ -15,10 +16,19 @@ class PresentationLayer:
 
     def present(
         self,
+        query: StructuredQuery | None,
         answer_draft: AnswerDraft,
         governance_report: GovernanceReport,
         validation_result: ValidationResult,
     ) -> QueryResponse:
+        """組裝 QueryResponse。
+
+        P3 UI parity：從 ``query`` 拉 ``classifier_source`` 與 ``query_profile``，
+        從 ``validation_result`` 拉 ``warnings``，讓即時回應與 ``QueryLogDetail``
+        看得到相同的 meta。為避免破壞既有單元測試，``query`` 允許傳 ``None``，
+        此時三個欄位全部用預設值（warnings=[], classifier_source="rule",
+        query_profile=LEGACY）。生產流程請務必傳入。
+        """
         if validation_result.confidence_light == ConfidenceLight.RED and answer_draft.forecast is not None:
             # Forecast special case: RED but has structured forecast content.
             # Preserve the original summary/highlights/facts (already guardrailed)
@@ -51,6 +61,9 @@ class PresentationLayer:
             impacts = answer_draft.impacts[:3]
             risks = answer_draft.risks[:4]
 
+        classifier_source = query.classifier_source if query is not None else "rule"
+        query_profile = query.query_profile if query is not None else QueryProfile.LEGACY
+
         return QueryResponse(
             query_id=str(uuid4()),
             summary=summary,
@@ -68,6 +81,9 @@ class PresentationLayer:
             sources=answer_draft.sources,
             disclaimer=self.DISCLAIMER,
             forecast=answer_draft.forecast,
+            warnings=list(validation_result.warnings),
+            classifierSource=classifier_source,
+            queryProfile=query_profile,
         )
 
     def _red_summary(self, summary: str) -> str:

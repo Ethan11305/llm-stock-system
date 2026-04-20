@@ -7,6 +7,7 @@ from llm_stock_system.core.interfaces import DocumentRepository, QueryLogStore
 from llm_stock_system.core.models import (
     Document,
     GovernanceReport,
+    QueryLogDetail,
     QueryResponse,
     SourceResponse,
     StructuredQuery,
@@ -124,6 +125,7 @@ class InMemoryDocumentRepository(DocumentRepository):
 class InMemoryQueryLogStore(QueryLogStore):
     def __init__(self) -> None:
         self._source_index: dict[str, SourceResponse] = {}
+        self._detail_index: dict[str, QueryLogDetail] = {}
 
     def save(
         self,
@@ -132,19 +134,35 @@ class InMemoryQueryLogStore(QueryLogStore):
         governance_report: GovernanceReport,
         validation_result: ValidationResult,
     ) -> str:
-        _ = validation_result
         query_id = response.query_id or str(uuid4())
+        source_count = len(governance_report.evidence)
+
         self._source_index[query_id] = SourceResponse(
             query_id=query_id,
             ticker=query.ticker,
             topic=query.topic,
-            source_count=len(governance_report.evidence),
+            source_count=source_count,
             sources=response.sources,
+        )
+
+        self._detail_index[query_id] = QueryLogDetail(
+            query_id=query_id,
+            query_profile=query.query_profile,
+            classifier_source=query.classifier_source,
+            validation_status=validation_result.validation_status,
+            warnings=list(validation_result.warnings),
+            source_count=source_count,
+            schema_version=1,
+            structured_query=query.model_dump(mode="json"),
+            response=response,
         )
         return query_id
 
     def get_sources(self, query_id: str) -> SourceResponse | None:
         return self._source_index.get(query_id)
+
+    def get_query_log(self, query_id: str) -> QueryLogDetail | None:
+        return self._detail_index.get(query_id)
 
 
 class HybridDocumentRepository(DocumentRepository):

@@ -7,16 +7,19 @@ from llm_stock_system.adapters.news_pipeline import (
     GoogleNewsRssProvider,
     MultiSourceNewsPipeline,
 )
+from llm_stock_system.adapters.openai_classifier import OpenAIStructuredQueryClassifier
 from llm_stock_system.adapters.openai_responses import OpenAIResponsesSynthesisClient
 from llm_stock_system.adapters.postgres_market_data import (
     FinMindPostgresGateway,
     PostgresMarketDocumentRepository,
     PostgresStockResolver,
 )
+from llm_stock_system.adapters.postgres_query_log_store import PostgresQueryLogStore
 from llm_stock_system.adapters.repositories import InMemoryDocumentRepository, InMemoryQueryLogStore
 from llm_stock_system.adapters.twse_financial import TwseCompanyFinancialClient
 from llm_stock_system.core.config import get_settings
 from llm_stock_system.layers.data_governance_layer import DataGovernanceLayer
+from llm_stock_system.layers.digest_input_layer import DigestInputLayer
 from llm_stock_system.layers.generation_layer import GenerationLayer
 from llm_stock_system.layers.input_layer import InputLayer
 from llm_stock_system.layers.presentation_layer import PresentationLayer
@@ -117,6 +120,7 @@ def create_app() -> FastAPI:
                 low_confidence_warmup_threshold=settings.low_confidence_warmup_threshold,
                 follow_up_cooldown_hours=settings.low_confidence_warmup_cooldown_hours,
                 embedding_service=embedding_service,
+                skip_embedding_for_digest=settings.digest_skip_embedding,
             )
             # P0: 注入 document_repository，讓 hydrator 在 embed 前能先 upsert documents
             query_hydrator._document_repository = document_repository
@@ -148,6 +152,18 @@ def create_app() -> FastAPI:
             max_documents=settings.max_retrieval_docs,
         )
 
+    # P0/P1：digest 路徑若開啟 Postgres，便改用 PostgresQueryLogStore；
+    # 否則沿用 InMemoryQueryLogStore（測試 / dev 情境也走這裡）。
+    query_log_store = None
+    if settings.digest_use_postgres_query_log and app.state.runtime_mode == "postgres+finmind":
+        try:
+            query_log_store = PostgresQueryLogStore(database_url=settings.database_url)
+        except Exception:
+            query_log_store = None
+    if query_log_store is None:
+        query_log_store = InMemoryQueryLogStore()
+    app.state.query_log_store = query_log_store
+
     pipeline = QueryPipeline(
         input_layer=InputLayer(stock_resolver=stock_resolver),
         retrieval_layer=retrieval_layer,
@@ -159,12 +175,63 @@ def create_app() -> FastAPI:
         validation_layer=ValidationLayer(
             min_green_confidence=settings.min_green_confidence,
             min_yellow_confidence=settings.min_yellow_confidence,
+            digest_min_sources=settings.digest_min_sources,
+            digest_max_evidence_age_days=settings.digest_max_evidence_age_days,
+            digest_stale_evidence_warn_threshold=settings.digest_stale_evidence_warn_threshold,
+            digest_low_source_penalty=settings.digest_low_source_penalty,
+            digest_stale_penalty=settings.digest_stale_penalty,
         ),
         presentation_layer=PresentationLayer(),
-        query_log_store=InMemoryQueryLogStore(),
+        query_log_store=query_log_store,
         query_hydrator=query_hydrator,
     )
 
     app.state.pipeline = pipeline
+
+    # P1：Single Stock Digest 產品線（獨立管線，共用其餘 layer 與 query_log_store）
+    digest_pipeline = None
+    if settings.digest_enabled:
+        digest_classifier = None
+        if settings.digest_classifier_enabled and settings.openai_api_key:
+            try:
+                digest_classifier = OpenAIStructuredQueryClassifier(
+                    api_key=settings.openai_api_key,
+                    model_name=settings.digest_classifier_model,
+                    base_url=settings.openai_base_url,
+                    timeout_seconds=settings.digest_classifier_timeout_seconds,
+                )
+            except Exception:
+                digest_classifier = None
+
+        digest_input_layer = DigestInputLayer(
+            stock_resolver=stock_resolver,
+            classifier=digest_classifier,
+        )
+        digest_pipeline = QueryPipeline(
+            input_layer=digest_input_layer,
+            retrieval_layer=retrieval_layer,
+            data_governance_layer=DataGovernanceLayer(),
+            generation_layer=GenerationLayer(
+                llm_client=llm_client,
+                prompt_path=settings.prompt_path,
+            ),
+            validation_layer=ValidationLayer(
+                min_green_confidence=settings.min_green_confidence,
+                min_yellow_confidence=settings.min_yellow_confidence,
+                digest_min_sources=settings.digest_min_sources,
+                digest_max_evidence_age_days=settings.digest_max_evidence_age_days,
+                digest_stale_evidence_warn_threshold=settings.digest_stale_evidence_warn_threshold,
+                digest_low_source_penalty=settings.digest_low_source_penalty,
+                digest_stale_penalty=settings.digest_stale_penalty,
+            ),
+            presentation_layer=PresentationLayer(),
+            query_log_store=query_log_store,
+            query_hydrator=query_hydrator,
+        )
+        app.state.digest_classifier_enabled = digest_classifier is not None
+
+    app.state.digest_enabled = digest_pipeline is not None
+    app.state.digest_pipeline = digest_pipeline
+
     app.include_router(router, prefix=settings.api_prefix)
     return app

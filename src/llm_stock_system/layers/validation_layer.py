@@ -1,6 +1,7 @@
 import logging
+from datetime import datetime, timedelta, timezone
 
-from llm_stock_system.core.enums import ConfidenceLight, ConsistencyStatus, ForecastMode, FreshnessStatus, StanceBias
+from llm_stock_system.core.enums import ConfidenceLight, ConsistencyStatus, ForecastMode, FreshnessStatus, QueryProfile, StanceBias
 from llm_stock_system.core.models import AnswerDraft, ForecastBlock, GovernanceReport, StructuredQuery, ValidationResult
 from llm_stock_system.core.validation_profiles import ConditionKind, ValidationProfile, ValidationRule, get_profile
 
@@ -11,9 +12,25 @@ class ValidationLayer:
     _PRELIMINARY_PREFIXES = ("初步判讀：", "preliminary")
     _INSUFFICIENT_DATA_TOKENS = ("資料不足", "無法確認")
 
-    def __init__(self, min_green_confidence: float, min_yellow_confidence: float) -> None:
+    def __init__(
+        self,
+        min_green_confidence: float,
+        min_yellow_confidence: float,
+        *,
+        digest_min_sources: int = 2,
+        digest_max_evidence_age_days: int = 7,
+        digest_stale_evidence_warn_threshold: float = 0.5,
+        digest_low_source_penalty: float = 0.10,
+        digest_stale_penalty: float = 0.05,
+    ) -> None:
         self._min_green_confidence = min_green_confidence
         self._min_yellow_confidence = min_yellow_confidence
+        # P2 digest-specific quality gate 門檻
+        self._digest_min_sources = digest_min_sources
+        self._digest_max_evidence_age_days = digest_max_evidence_age_days
+        self._digest_stale_warn_threshold = digest_stale_evidence_warn_threshold
+        self._digest_low_source_penalty = digest_low_source_penalty
+        self._digest_stale_penalty = digest_stale_penalty
 
     # Forecast-specific confidence caps — forecast answers must never look
     # as confident as grounded historical answers.
@@ -68,6 +85,12 @@ class ValidationLayer:
         )
         confidence_score = self._apply_match_type_cap(
             query,
+            confidence_score,
+            warnings,
+        )
+        confidence_score = self._apply_digest_profile_gate(
+            query,
+            governance_report,
             confidence_score,
             warnings,
         )
@@ -478,6 +501,69 @@ class ValidationLayer:
             # "partial" 和 "exact" 不調整
         except Exception:
             pass  # Registry 不可用時靜默忽略
+        return confidence_score
+
+    def _apply_digest_profile_gate(
+        self,
+        query: StructuredQuery,
+        governance_report: GovernanceReport,
+        confidence_score: float,
+        warnings: list[str],
+    ) -> float:
+        """P2 Digest 產品線品質 gate。
+
+        只對 ``query_profile == SINGLE_STOCK_DIGEST`` 的查詢生效，legacy 路徑完全不碰。
+
+        規則（都是 warning-first，非 hard-fail）：
+          1. evidence 數量 < digest_min_sources：加 warning 並扣 digest_low_source_penalty
+          2. evidence 中已過時（published_at 早於 N 天前）的比例 ≥ threshold：
+             加 warning 並扣 digest_stale_penalty
+          3. 所有 evidence support_score 皆為 0：加 warning（通常代表沒有真正的對證據加權）
+
+        設計理念：digest 產品對「新聞時效 + 交叉驗證」極度敏感，但使用者仍應能看到結果；
+        因此用 warnings + 輕度降 confidence 引導前端 UI 呈現「需審閱」樣式，而不是直接擋掉。
+        """
+        if query.query_profile != QueryProfile.SINGLE_STOCK_DIGEST:
+            return confidence_score
+
+        evidence = governance_report.evidence
+        n = len(evidence)
+
+        # 1) 最低 source 要求
+        if n < self._digest_min_sources:
+            warnings.append(
+                f"Digest 品質 gate：僅 {n} 筆 evidence，低於最低需求 {self._digest_min_sources}"
+                "，前端應標示『資料單一，交叉驗證不足』。"
+            )
+            confidence_score = max(confidence_score - self._digest_low_source_penalty, 0.0)
+
+        # 2) evidence 時效性
+        if n > 0:
+            now = datetime.now(timezone.utc)
+            cutoff = now - timedelta(days=self._digest_max_evidence_age_days)
+            stale_count = 0
+            for item in evidence:
+                published_at = item.published_at
+                # 容錯：published_at 無 tzinfo 時視為 UTC
+                if published_at.tzinfo is None:
+                    published_at = published_at.replace(tzinfo=timezone.utc)
+                if published_at < cutoff:
+                    stale_count += 1
+            stale_ratio = stale_count / n
+            if stale_ratio >= self._digest_stale_warn_threshold:
+                warnings.append(
+                    f"Digest 品質 gate：{stale_count}/{n} 筆證據超過 "
+                    f"{self._digest_max_evidence_age_days} 天（stale_ratio="
+                    f"{stale_ratio:.0%}），與 digest 的 7 天時間窗不符。"
+                )
+                confidence_score = max(confidence_score - self._digest_stale_penalty, 0.0)
+
+            # 3) support_score 全 0 檢查
+            if all(item.support_score == 0 for item in evidence):
+                warnings.append(
+                    "Digest 品質 gate：全部 evidence 的 support_score=0，governance 沒能對證據加權。"
+                )
+
         return confidence_score
 
     # --- Helper methods ---

@@ -9,6 +9,7 @@ from llm_stock_system.core.models import (
     GovernanceReport,
     HydrationResult,
     PriceBar,
+    QueryLogDetail,
     QueryResponse,
     StockInfo,
     SourceResponse,
@@ -40,6 +41,9 @@ class QueryLogStore(Protocol):
         ...
 
     def get_sources(self, query_id: str) -> SourceResponse | None:
+        ...
+
+    def get_query_log(self, query_id: str) -> QueryLogDetail | None:
         ...
 
 
@@ -107,28 +111,3 @@ class MarketDataGateway(Protocol):
 
 # ─────────────────────────────────────────────────────────────────────────────
 # P0 Embedding Pipeline Protocols
-# ─────────────────────────────────────────────────────────────────────────────
-
-class EmbeddingClient(Protocol):
-    """Embedding 生成介面，方便未來替換模型（OpenAI / 本地模型等）。"""
-
-    def embed_texts(self, texts: list[str]) -> list[list[float]]:
-        """將文字列表轉為向量列表（維度依模型而異）。"""
-        ...
-
-
-class VectorRepository(Protocol):
-    """向量檢索與儲存介面。"""
-
-    def search_similar(
-        self,
-        query_vector: list[float],
-        top_k: int = 10,
-        filters: dict | None = None,
-    ) -> list[SemanticSearchResult]:
-        """以 cosine similarity 找最相似的 chunk。"""
-        ...
-
-    def upsert_embeddings(self, results: list[EmbeddingResult]) -> int:
-        """批次寫入或更新 embedding。回傳實際寫入筆數。"""
-        ...

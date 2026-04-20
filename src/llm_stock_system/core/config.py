@@ -36,6 +36,21 @@ class Settings(BaseSettings):
     hybrid_retrieval_semantic_weight: float = 0.6
     hybrid_retrieval_metadata_weight: float = 0.4
     semantic_similarity_threshold: float = 0.65
+    # P1 Digest 產品線
+    digest_enabled: bool = True
+    digest_classifier_enabled: bool = True  # True=classifier 主 + rule fallback；False=純 rule
+    digest_classifier_model: str = "gpt-4o-mini"
+    digest_classifier_timeout_seconds: float = 8.0
+    digest_default_time_range_days: int = 7
+    digest_max_sources: int = 8
+    digest_use_postgres_query_log: bool = False  # True 需 002/003/005 migration 都已執行
+    # P2 Digest 品質 + 成本 gate
+    digest_min_sources: int = 2  # 低於此值加 warning 並輕度降 confidence
+    digest_max_evidence_age_days: int = 7  # 超出此天數的證據視為過時
+    digest_stale_evidence_warn_threshold: float = 0.5  # ≥ 這比例證據過時才警告
+    digest_low_source_penalty: float = 0.10  # source 不足時扣分
+    digest_stale_penalty: float = 0.05  # 證據過時扣分
+    digest_skip_embedding: bool = True  # 預設不為 digest 路徑觸發 embedding（省 token）
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

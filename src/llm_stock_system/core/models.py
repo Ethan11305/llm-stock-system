@@ -15,6 +15,7 @@ from .enums import (
     ForecastMode,
     FreshnessStatus,
     Intent,
+    QueryProfile,
     SourceTier,
     StanceBias,
     SufficiencyStatus,
@@ -242,6 +243,7 @@ class StructuredQuery(BaseModel):
     question_type: str = "market_summary"
     stance_bias: StanceBias = StanceBias.NEUTRAL
     classifier_source: str = "rule"  # "rule" | "llm" | "mixed"
+    query_profile: QueryProfile = QueryProfile.LEGACY
     # --- Forecast semantic fields ---
     is_forecast_query: bool = False
     wants_direction: bool = False
@@ -496,6 +498,37 @@ class QueryResponse(BaseModel):
     sources: list[SourceCitation]
     disclaimer: str
     forecast: ForecastBlock | None = None
+    # P3 UI parity：把回查 QueryLogDetail 才看得到的 meta 補進即時回應，
+    # 讓前端不必二次查詢 /query-log/{id} 就能顯示 warnings / 分類來源 / digest 標籤。
+    warnings: list[str] = Field(default_factory=list)
+    classifier_source: str = Field(default="rule", alias="classifierSource")
+    query_profile: QueryProfile = Field(
+        default=QueryProfile.LEGACY,
+        alias="queryProfile",
+    )
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class QueryLogDetail(BaseModel):
+    """單一查詢的完整回查資料。
+
+    採用組合式設計：直接嵌入 ``QueryResponse``，避免欄位漂移時兩套 schema 不同步。
+
+    Digest 產品線與 legacy 路徑皆可共用這個模型。``query_profile`` 欄位標示
+    該次查詢是否走 digest 路徑，便於前端或分析工具分流。
+    """
+
+    query_id: str = Field(alias="queryId")
+    query_profile: QueryProfile = Field(alias="queryProfile")
+    classifier_source: str = Field(alias="classifierSource")
+    validation_status: str = Field(alias="validationStatus")
+    warnings: list[str] = Field(default_factory=list)
+    source_count: int = Field(default=0, alias="sourceCount")
+    schema_version: int = Field(default=1, alias="schemaVersion")
+
+    structured_query: dict = Field(default_factory=dict, alias="structuredQuery")
+    response: QueryResponse
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -506,4 +539,3 @@ class SourceResponse(BaseModel):
     topic: Topic
     source_count: int
     sources: list[SourceCitation] = Field(default_factory=list)
- 

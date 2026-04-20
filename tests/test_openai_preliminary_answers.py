@@ -130,17 +130,19 @@ class OpenAIPreliminaryAnswerTestCase(unittest.TestCase):
         self.assertEqual(draft.sources, [])
 
     def test_presentation_preserves_preliminary_summary_even_when_red(self) -> None:
+        structured_query = StructuredQuery(
+            user_query="9999 這家公司最近有什麼消息？",
+            ticker="9999",
+            topic=Topic.COMPOSITE,
+            question_type="market_summary",
+            time_range_label="7d",
+            time_range_days=7,
+        )
         draft = FailingOpenAIResponsesSynthesisClient()._build_local_preliminary_fallback(
-            StructuredQuery(
-                user_query="9999 這家公司最近有什麼消息？",
-                ticker="9999",
-                topic=Topic.COMPOSITE,
-                question_type="market_summary",
-                time_range_label="7d",
-                time_range_days=7,
-            )
+            structured_query
         )
         response = PresentationLayer().present(
+            structured_query,
             draft,
             GovernanceReport(
                 evidence=[],

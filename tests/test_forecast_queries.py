@@ -831,7 +831,7 @@ class ForecastRedPresentationTestCase(unittest.TestCase):
         )
 
         layer = PresentationLayer()
-        response = layer.present(draft, report, validation_result)
+        response = layer.present(None, draft, report, validation_result)
 
         # Summary should be the original forecast text, NOT "資料不足，無法確認。"
         self.assertNotEqual(response.summary, "資料不足，無法確認。")
@@ -864,7 +864,7 @@ class ForecastRedPresentationTestCase(unittest.TestCase):
         )
 
         layer = PresentationLayer()
-        response = layer.present(draft, report, validation_result)
+        response = layer.present(None, draft, report, validation_result)
 
         # Should be replaced with generic fallback
         self.assertEqual(response.summary, "資料不足，無法確認。")

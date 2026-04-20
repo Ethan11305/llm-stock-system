@@ -109,6 +109,24 @@ class TopicTag(str, Enum):
     SENTIMENT            = "市場情緒"
     RISK_MGMT            = "風險管理"
 
+    # ── Digest 產品線專用 controlled tags ──
+    THEME                = "題材"
+    INDUSTRY             = "產業"
+
+
+class QueryProfile(str, Enum):
+    """最高階的產品分流欄位。
+
+    - ``LEGACY``：沿用 question_type 衍生 intent 的舊路徑。
+    - ``SINGLE_STOCK_DIGEST``：單股近 7 天新聞/公告/綜合 digest 可信產品線。
+
+    Digest 路徑裡主流程只看 ``query_profile + intent + topic + topic_tags +
+    time_range``；``question_type`` 僅保留作為相容與分析標籤，不再參與控制流。
+    """
+
+    LEGACY = "legacy"
+    SINGLE_STOCK_DIGEST = "single_stock_digest"
+
 
 class ForecastMode(str, Enum):
     """How the forecast was derived."""

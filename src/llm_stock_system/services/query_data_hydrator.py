@@ -8,7 +8,7 @@ import time
 from threading import Lock, Thread
 from typing import TYPE_CHECKING
 
-from llm_stock_system.core.enums import DataFacet, Intent
+from llm_stock_system.core.enums import DataFacet, Intent, QueryProfile
 from llm_stock_system.core.models import HydrationResult, StructuredQuery, ValidationResult
 
 if TYPE_CHECKING:
@@ -114,6 +114,7 @@ class QueryDataHydrator:
         embedding_service: EmbeddingService | None = None,
         chunker: DocumentChunker | None = None,
         parallel_hydration_workers: int = DEFAULT_PARALLEL_WORKERS,
+        skip_embedding_for_digest: bool = True,
     ) -> None:
         self._gateway = gateway
         self._low_confidence_warmup_enabled = low_confidence_warmup_enabled
@@ -129,6 +130,8 @@ class QueryDataHydrator:
         self._document_repository: DocumentRepository | None = None  # 由 app.py 注入
         # P1 並行 hydration：worker 數（0 或 1 = 退回串行模式）
         self._parallel_workers = max(1, parallel_hydration_workers)
+        # P2 成本 gate：digest 路徑預設不觸發 embedding，避免每次查詢都跑 OpenAI embedding API
+        self._skip_embedding_for_digest = skip_embedding_for_digest
 
     def hydrate(self, query: StructuredQuery) -> HydrationResult:
         """執行資料補水（Hydration）主流程。
@@ -221,8 +224,18 @@ class QueryDataHydrator:
         - 只在 embedding_service 已設定時觸發
         - daemon thread 執行，不阻擋主查詢回應
         - 任何失敗只記錄 warning，不影響主流程
+        - P2：digest 路徑預設跳過（skip_embedding_for_digest=True），省 token
         """
         if self._embedding_service is None:
+            return
+        if (
+            self._skip_embedding_for_digest
+            and getattr(query, "query_profile", None) == QueryProfile.SINGLE_STOCK_DIGEST
+        ):
+            logger.debug(
+                "skip_embedding_for_digest：digest 路徑跳過 embedding（ticker=%s）",
+                getattr(query, "ticker", None),
+            )
             return
 
         def _background_embed() -> None:

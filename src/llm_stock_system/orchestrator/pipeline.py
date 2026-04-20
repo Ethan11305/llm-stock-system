@@ -62,6 +62,7 @@ class QueryPipeline:
             hydration_result.preferred_miss_list,
         )
         response = self._presentation_layer.present(
+            structured_query,
             answer_draft,
             governance_report,
             validation_result,
