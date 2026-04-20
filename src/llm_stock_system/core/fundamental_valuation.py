@@ -23,30 +23,37 @@ _VALUATION_KEYWORDS = (
     "\u6b77\u53f2\u5206\u4f4d",
     "valuation",
 )
-_INVESTMENT_SUPPORT_TYPES = {"fundamental_pe_review", "investment_support"}
-
-
 def is_fundamental_valuation_question(query: StructuredQuery) -> bool:
+    """判斷是否為需要基本面估值視角的問題。
+
+    路由依據：intent + topic_tags（含 QUESTION_TYPE_FALLBACK_TOPIC_TAGS 注入的最小集），
+    不再讀取 question_type。
+
+    topic_tags 由 StructuredQuery model validator 保證永遠包含該 question_type 的
+    QUESTION_TYPE_FALLBACK_TOPIC_TAGS，因此 fundamental_pe_review / investment_support
+    等型別不需要額外的 question_type fallback。
+    """
     topic_tags = set(query.topic_tags or [])
 
     if query.intent == Intent.VALUATION_CHECK:
+        # 同時含基本面（TopicTag.FUNDAMENTAL）與估值（TopicTag.VALUATION）標籤
         return {
             TopicTag.FUNDAMENTAL.value,
             TopicTag.VALUATION.value,
         }.issubset(topic_tags)
 
     if query.intent == Intent.INVESTMENT_ASSESSMENT:
-        if any(
+        # 含基本面、估值或投資評估任一標籤即觸發
+        return any(
             tag in topic_tags
             for tag in (
                 TopicTag.FUNDAMENTAL.value,
                 TopicTag.VALUATION.value,
                 "投資評估",
             )
-        ):
-            return True
+        )
 
-    return query.question_type in _INVESTMENT_SUPPORT_TYPES
+    return False
 
 
 def has_fundamental_evidence(governance_report: GovernanceReport) -> bool:

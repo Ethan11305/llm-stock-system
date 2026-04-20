@@ -78,9 +78,14 @@ class DataGovernanceLayer:
         return round(tier_weight, 2)
 
     def _consistency_status(self, evidence: list[Evidence]) -> ConsistencyStatus:
-        if len(evidence) >= 3:
+        # Use source diversity as the consistency proxy:
+        # counting unique source names is more meaningful than raw document count,
+        # because two documents from different publishers genuinely corroborate each other,
+        # whereas many documents from the same publisher are just repetition.
+        unique_sources = len({e.source_name for e in evidence})
+        if unique_sources >= 3:
             return ConsistencyStatus.CONSISTENT
-        if len(evidence) == 2:
+        if unique_sources == 2:
             return ConsistencyStatus.MOSTLY_CONSISTENT
         return ConsistencyStatus.CONFLICTING
 

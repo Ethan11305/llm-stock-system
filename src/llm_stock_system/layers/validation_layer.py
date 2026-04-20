@@ -96,11 +96,17 @@ class ValidationLayer:
         governance_report: GovernanceReport,
         answer_draft: AnswerDraft,
     ) -> float:
-        evidence_score = min(len(governance_report.evidence) / 4, 1.0) * 0.30
+        n = len(governance_report.evidence)
+        # Dynamic denominator: treat 2 pieces of evidence as the baseline
+        # for a well-supported answer.  A fixed denominator of 4 unfairly
+        # penalises small-cap stocks where the maximum retrievable evidence
+        # is naturally 2–3 items.  With max(n, 2) the score reaches 1.0 as
+        # soon as we have ≥ 2 sources; a single document still scores 0.5.
+        evidence_score = min(n / max(n, 2), 1.0) * 0.30
         trust_score = governance_report.high_trust_ratio * 0.25
         freshness_score = self._freshness_weight(governance_report.freshness) * 0.20
         consistency_score = self._consistency_weight(governance_report.consistency) * 0.15
-        citation_score = min(len(answer_draft.sources) / max(len(governance_report.evidence), 1), 1.0) * 0.10
+        citation_score = min(len(answer_draft.sources) / max(n, 1), 1.0) * 0.10
         return round(
             evidence_score + trust_score + freshness_score + consistency_score + citation_score,
             2,

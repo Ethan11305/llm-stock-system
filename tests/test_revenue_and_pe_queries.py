@@ -31,7 +31,10 @@ class RevenueAndPEQueryTestCase(unittest.TestCase):
 
         self.assertEqual(query.ticker, "2412")
         self.assertEqual(query.question_type, "pe_valuation_review")
-        self.assertEqual(query.time_range_days, 365)
+        # 查詢含「歷史」關鍵字，語意為「本益比的歷史分位比較」，
+        # 需要足夠長的歷史區間才能判斷高低位，5y（1825d）比 policy 預設 1y 更符合語意。
+        # 若使用者未提及任何時間關鍵字，才由 policy 預設（1y）填入。
+        self.assertEqual(query.time_range_days, 1825)
 
     def test_rule_based_summary_mentions_revenue_yoy(self) -> None:
         query = InputLayer().parse(

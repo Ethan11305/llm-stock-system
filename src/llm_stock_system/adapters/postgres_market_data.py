@@ -983,7 +983,7 @@ class FinMindPostgresGateway:
             return []
         # 若使用者指定較短區間（e.g. 7d），文件內容仍只呈現該區間的摘要
         requested_start = end_date - timedelta(days=query.time_range_days)
-        window_bars = [b for b in bars if b.trading_date >= requested_start] or bars
+        window_bars = [b for b in bars if b.trading_date.date() >= requested_start] or bars
         label = query.company_name or query.ticker
         latest = window_bars[0]
         earliest = window_bars[-1]
@@ -2746,13 +2746,19 @@ class FinMindPostgresGateway:
         label = query.company_name or query.ticker
         today = datetime.now(timezone.utc).date()
         since = today - timedelta(days=query.time_range_days)
+        # 財報與股利是「背景脈絡」型資料，不應受短時間窗口限制：
+        #   - 這裡撈過去一年的資料，builder 取「最新一筆」即可
+        #   - 不傳 since，避免 7d 查詢把年配股利或季報全過濾掉
         statements = self.get_financial_statement_items(query.ticker, today - timedelta(days=365), today)
         dividends = self.get_dividend_policies(query.ticker, today - timedelta(days=365), today)
         news = self.get_stock_news(query.ticker, since, today)
         documents: list[Document] = []
         documents.extend(self._build_news_documents(label, news, limit=5))
-        documents.extend(self._build_dividend_documents(label, query.ticker, dividends, today, since))
-        documents.extend(self._build_recent_statement_documents(label, query.ticker, statements, since))
+        # 不傳 since → 取最新的股利政策，不受查詢時間窗口限制
+        documents.extend(self._build_dividend_documents(label, query.ticker, dividends, today))
+        # 用較寬的窗口（365天）確保最新一季財報不會因短區間被排除
+        statement_since = today - timedelta(days=365)
+        documents.extend(self._build_recent_statement_documents(label, query.ticker, statements, statement_since))
         return self._sorted(documents)
 
     def _build_dividend_yield_documents(self, query: StructuredQuery) -> list[Document]:

@@ -4,7 +4,12 @@ import re
 
 from llm_stock_system.core.enums import StanceBias, Topic, TopicTag
 from llm_stock_system.core.interfaces import StockResolver
-from llm_stock_system.core.models import QueryRequest, StructuredQuery, infer_intent_from_question_type
+from llm_stock_system.core.models import (
+    QUESTION_TYPE_TO_INTENT,
+    QueryRequest,
+    StructuredQuery,
+    infer_intent_from_question_type,
+)
 
 
 class InputLayer:
@@ -155,7 +160,9 @@ class InputLayer:
         "偏空",
         "看漲",
         "看跌",
-        "區間",
+        # 「區間」單獨出現不代表預測需求（e.g. 「這週股價區間？」是查歷史高低點）；
+        # 需配合「預估」「預測」等明確前瞻語才應觸發 forecast。
+        # 「預估區間」由上方 "預估" 項目涵蓋，故此處移除裸字 "區間"。
         "估計",
         "推估",
     )
@@ -822,9 +829,45 @@ class InputLayer:
             "latest_quarter": ("latest_quarter", 90),
         }
 
+        # Step 1：使用者明確指定時間範圍，最高優先
         if explicit_range in mapping:
             return mapping[explicit_range]
 
+        # Step 2：自然語言關鍵字偵測（移至 policy 查表前，避免被 policy 覆蓋）
+        day_match = re.search(r"(?<!\d)(\d{1,3})\s*\u5929", query)
+        if day_match:
+            days = int(day_match.group(1))
+            return f"{days}d", days
+
+        if any(token in query for token in ("\u4eca\u5929", "\u4eca\u65e5", "\u8fd1 1 \u5929", "\u6700\u8fd1 1 \u5929", "\u8fd11\u5929", "\u6700\u8fd11\u5929")):
+            return mapping["1d"]
+        if any(token in query for token in ("\u6700\u8fd1\u4e00\u9031", "\u8fd1\u4e00\u9031", "\u6700\u8fd1 7 \u5929", "\u8fd1 7 \u5929", "\u8fd17\u5929", "\u6700\u8fd17\u5929", "\u4e00\u9031")):
+            return mapping["7d"]
+        if any(token in query for token in ("\u6700\u8fd1\u4e00\u500b\u6708", "\u8fd1\u4e00\u500b\u6708", "\u6700\u8fd1 30 \u5929", "\u8fd1 30 \u5929", "\u8fd130\u5929", "\u6700\u8fd130\u5929")):
+            return mapping["30d"]
+        if any(token in query for token in ("\u904e\u53bb\u4e09\u5e74", "\u8fd1\u4e09\u5e74", "\u6700\u8fd1\u4e09\u5e74", "\u904e\u53bb3\u5e74", "\u8fd13\u5e74", "\u4e09\u5e74")):
+            return mapping["3y"]
+        if any(token in query for token in ("\u904e\u53bb\u4e94\u5e74", "\u8fd1\u4e94\u5e74", "\u6700\u8fd1\u4e94\u5e74", "\u904e\u53bb5\u5e74", "\u8fd15\u5e74", "\u4e94\u5e74", "\u6b77\u53f2")):
+            return mapping["5y"]
+        if any(token in query for token in ("\u53bb\u5e74", "\u5168\u5e74", "\u5e74\u5ea6", "\u8fd1\u4e00\u5e74", "\u6700\u8fd1\u4e00\u5e74")):
+            return mapping["1y"]
+        if any(token in query for token in ("\u6700\u65b0\u4e00\u5b63", "\u6700\u8fd1\u4e00\u5b63", "\u4e0a\u4e00\u5b63", "\u672c\u5b63")):
+            return mapping["latest_quarter"]
+
+        # Step 3：向 PolicyRegistry 查詢 question_type 對應的預設時間窗口
+        intent = QUESTION_TYPE_TO_INTENT.get(question_type)
+        if intent is not None:
+            try:
+                from llm_stock_system.core.query_policy import get_policy_registry
+
+                policy = get_policy_registry().resolve(intent, question_type)
+                if policy.default_time_range_days is not None:
+                    label = policy.default_time_range_label or f"{policy.default_time_range_days}d"
+                    return label, policy.default_time_range_days
+            except Exception:
+                pass  # fallback 到下方 question_type 對照表
+
+        # Step 4：原有 question_type 對照表（暫時保留為 fallback，待所有 policy 補齊後移除）
         if question_type == "monthly_revenue_yoy_review":
             return mapping["1y"]
         if question_type == "fundamental_pe_review":
@@ -851,27 +894,6 @@ class InputLayer:
             return mapping["latest_quarter"]
         if question_type == "debt_dividend_safety_review":
             return mapping["3y"]
-
-        day_match = re.search(r"(?<!\d)(\d{1,3})\s*\u5929", query)
-        if day_match:
-            days = int(day_match.group(1))
-            return f"{days}d", days
-
-        if any(token in query for token in ("\u4eca\u5929", "\u4eca\u65e5", "\u8fd1 1 \u5929", "\u6700\u8fd1 1 \u5929", "\u8fd11\u5929", "\u6700\u8fd11\u5929")):
-            return mapping["1d"]
-        if any(token in query for token in ("\u6700\u8fd1\u4e00\u9031", "\u8fd1\u4e00\u9031", "\u6700\u8fd1 7 \u5929", "\u8fd1 7 \u5929", "\u8fd17\u5929", "\u6700\u8fd17\u5929", "\u4e00\u9031")):
-            return mapping["7d"]
-        if any(token in query for token in ("\u6700\u8fd1\u4e00\u500b\u6708", "\u8fd1\u4e00\u500b\u6708", "\u6700\u8fd1 30 \u5929", "\u8fd1 30 \u5929", "\u8fd130\u5929", "\u6700\u8fd130\u5929")):
-            return mapping["30d"]
-        if any(token in query for token in ("\u904e\u53bb\u4e09\u5e74", "\u8fd1\u4e09\u5e74", "\u6700\u8fd1\u4e09\u5e74", "\u904e\u53bb3\u5e74", "\u8fd13\u5e74", "\u4e09\u5e74")):
-            return mapping["3y"]
-        if any(token in query for token in ("\u904e\u53bb\u4e94\u5e74", "\u8fd1\u4e94\u5e74", "\u6700\u8fd1\u4e94\u5e74", "\u904e\u53bb5\u5e74", "\u8fd15\u5e74", "\u4e94\u5e74", "\u6b77\u53f2")):
-            return mapping["5y"]
-        if any(token in query for token in ("\u53bb\u5e74", "\u5168\u5e74", "\u5e74\u5ea6", "\u8fd1\u4e00\u5e74", "\u6700\u8fd1\u4e00\u5e74")):
-            return mapping["1y"]
-        if any(token in query for token in ("\u6700\u65b0\u4e00\u5b63", "\u6700\u8fd1\u4e00\u5b63", "\u4e0a\u4e00\u5b63", "\u672c\u5b63")):
-            return mapping["latest_quarter"]
-
         if question_type in {"eps_dividend_review", "dividend_yield_review", "ex_dividend_performance"}:
             return mapping["1y"]
         if question_type == "revenue_growth_review":
@@ -882,6 +904,8 @@ class InputLayer:
             return "90d", 90
         if question_type == "technical_indicator_review":
             return mapping["30d"]
+
+        # Step 5：topic 與最終 fallback
         if topic == Topic.EARNINGS:
             return mapping["latest_quarter"]
         return mapping["7d"]
@@ -1247,26 +1271,44 @@ class InputLayer:
         lowered = query.lower()
         compacted = self._compact_query(query)
         seen_kw: set[str] = set()
-        matched_tags: list[_TopicTag] = []
-        matched_keywords: list[str] = []
+
+        # 第一輪：收集所有命中的 (tag, keyword) 對（原始匹配，未過濾子字串）
+        raw_hits: list[tuple[_TopicTag, str]] = []
 
         for tag, keywords in self._TOPIC_TAG_KEYWORD_MAP.items():
-            kws_hit = [
-                kw for kw in keywords
+            for kw in keywords:
+                if kw in seen_kw:
+                    continue
                 if (
                     kw.lower() in lowered
                     or kw in query
                     or kw.lower().replace(" ", "") in compacted
-                )
-                and kw not in seen_kw
-            ]
-            if kws_hit:
-                matched_tags.append(tag)
-                seen_kw.update(kws_hit)
-                matched_keywords.extend(kws_hit)
+                ):
+                    seen_kw.add(kw)
+                    raw_hits.append((tag, kw))
 
-        if matched_tags:
-            return matched_tags, matched_keywords
+        # 第二輪：過濾子字串誤判（Bug 2 修正）
+        # 若某關鍵字是另一個已命中關鍵字的嚴格子字串，則視為誤判並移除。
+        # 例：「毛利率」命中 GROSS_MARGIN 後，「利率」在 MACRO 的命中應被過濾。
+        all_matched_kw: set[str] = {kw for _, kw in raw_hits}
+        filtered_hits = [
+            (tag, kw) for (tag, kw) in raw_hits
+            if not any(kw != other and kw in other for other in all_matched_kw)
+        ]
+
+        # 整理回傳，保留原始出現順序
+        tag_order: list[_TopicTag] = []
+        seen_tags: set[_TopicTag] = set()
+        matched_keywords: list[str] = []
+
+        for tag, kw in filtered_hits:
+            if tag not in seen_tags:
+                seen_tags.add(tag)
+                tag_order.append(tag)
+            matched_keywords.append(kw)
+
+        if tag_order:
+            return tag_order, matched_keywords
 
         fallback = self.QUESTION_TYPE_FALLBACK_TOPIC_TAGS.get(question_type, ())
         return [], list(fallback)

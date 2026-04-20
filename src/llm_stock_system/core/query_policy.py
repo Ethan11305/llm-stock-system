@@ -65,11 +65,13 @@ class QueryPolicy:
     confidence_cap: float | None = None
     min_evidence_count: int = 1
     cove_eligible: bool = False   # P3 CoVe 用：財報類 + 數字型回答才啟用
-    match_type: str = "generic"   # 由 resolve_by_tags() 解析時設定，勿手動指定
-                                  # "exact"   → controlled_tags 全部命中某個 policy
-                                  # "partial" → controlled_tags 部分命中
-                                  # "generic" → 無 tag 匹配，退回 intent 通用 policy
-                                  # "fallback"→ intent 也找不到，退回全域預設
+    match_type: str = "generic"           # 由 resolve_by_tags() 解析時設定，勿手動指定
+                                          # "exact"   → controlled_tags 全部命中
+                                          # "partial" → controlled_tags 部分命中
+                                          # "generic" → 無 tag 匹配，退回 intent 通用 policy
+                                          # "fallback"→ intent 也找不到，退回全域預設
+    default_time_range_days: int | None = None   # 規劃項目 C：此查詢類型的預設時間窗口
+    default_time_range_label: str | None = None  # 對應的 label（如 "1y", "latest_quarter"）
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -86,6 +88,8 @@ def _make_policy(
     confidence_cap: float | None = None,
     min_evidence_count: int = 1,
     cove_eligible: bool = False,
+    default_time_range_days: int | None = None,
+    default_time_range_label: str | None = None,
 ) -> QueryPolicy:
     """從現有常數建立 QueryPolicy（避免重複定義 facet）。
 
@@ -118,6 +122,8 @@ def _make_policy(
         confidence_cap=confidence_cap,
         min_evidence_count=min_evidence_count,
         cove_eligible=cove_eligible,
+        default_time_range_days=default_time_range_days,
+        default_time_range_label=default_time_range_label,
     )
 
 
@@ -146,6 +152,19 @@ class PolicyRegistry:
         # 遺留方式（question_type based）：
         policy = registry.resolve(intent=Intent.NEWS_DIGEST, question_type="shipping_rate_impact_review")
     """
+
+    # 每個 intent 的「通用 policy」question_type，用於 generic fallback
+    # 當 resolve_by_tags() 沒有任何 tag 命中時，回傳此表指定的 policy，
+    # 而非依賴 min(topic_tags) 的長度排序（容易因為各 policy 的 tag 數量不同而選錯）
+    _INTENT_GENERIC_QT: dict[Intent, str] = {
+        Intent.NEWS_DIGEST:          "market_summary",
+        Intent.EARNINGS_REVIEW:      "earnings_summary",
+        Intent.VALUATION_CHECK:      "pe_valuation_review",
+        Intent.FINANCIAL_HEALTH:     "profitability_stability_review",
+        Intent.DIVIDEND_ANALYSIS:    "dividend_yield_review",
+        Intent.TECHNICAL_VIEW:       "technical_indicator_review",
+        Intent.INVESTMENT_ASSESSMENT: "investment_support",
+    }
 
     def __init__(self) -> None:
         # (intent, question_type) → QueryPolicy
@@ -226,7 +245,14 @@ class PolicyRegistry:
             return replace(best_policy, match_type=computed_match_type)
 
         # 無 tag 匹配（空 tags 或通用查詢）：回傳 intent 的通用 policy
-        # 選 topic_tags 最少的，通常是 generic / market_summary 類型
+        # 優先查 _INTENT_GENERIC_QT 指定的 question_type，避免 min(topic_tags)
+        # 因各 policy tag 數量不一而選到錯誤的具體 policy（Bug 1 修正）
+        generic_qt = self._INTENT_GENERIC_QT.get(intent)
+        if generic_qt:
+            key = (intent, generic_qt)
+            if key in self._policies:
+                return replace(self._policies[key], match_type="generic")
+        # 最終兜底：選 topic_tags 最少的（理論上不應走到這裡）
         generic = min(candidates, key=lambda p: len(p.topic_tags))
         return replace(generic, match_type="generic")
 
@@ -279,120 +305,128 @@ class PolicyRegistry:
         """
         policies = [
             # ── NEWS_DIGEST 類 ──────────────────────────────────────────────
-            _make_policy("market_summary",                "news_generic"),
+            _make_policy("market_summary", "news_generic",
+                default_time_range_days=7, default_time_range_label="7d"),
             _make_policy(
                 "shipping_rate_impact_review", "news_shipping",
-                # routing_tags = if-elif 中 news_shipping 的完整判斷標籤集
                 routing_tags=("航運", "SCFI"),
+                default_time_range_days=30, default_time_range_label="30d",
             ),
             _make_policy(
                 "electricity_cost_impact_review", "news_electricity",
                 routing_tags=("電價", "成本"),
+                default_time_range_days=30, default_time_range_label="30d",
             ),
             _make_policy(
                 "macro_yield_sentiment_review", "news_macro",
-                # if-elif 檢查 {"總經", "CPI", "殖利率"}；fallback_tags 只有 ("CPI", "殖利率")
                 routing_tags=("總經", "CPI", "殖利率"),
+                default_time_range_days=30, default_time_range_label="30d",
             ),
             _make_policy(
                 "theme_impact_review", "news_theme",
-                # if-elif 檢查 {"題材", "產業", "AI", "電動車", "半導體設備"}；
-                # fallback_tags 只有 ("題材", "產業")，補齊完整路由標籤集
                 routing_tags=("題材", "產業", "AI", "電動車", "半導體設備"),
+                default_time_range_days=30, default_time_range_label="30d",
             ),
             _make_policy(
                 "guidance_reaction_review", "news_guidance",
                 routing_tags=("法說", "指引"),
+                default_time_range_days=30, default_time_range_label="30d",
             ),
             _make_policy(
                 "listing_revenue_review", "news_listing",
                 routing_tags=("上市", "營收"),
+                default_time_range_days=30, default_time_range_label="30d",
             ),
 
             # ── EARNINGS_REVIEW 類 ─────────────────────────────────────────
             _make_policy(
-                "earnings_summary",
-                "earnings_fundamental",
-                cove_eligible=True,          # 財報類 + 數字多，適合 CoVe
-                min_evidence_count=2,
+                "earnings_summary", "earnings_fundamental",
+                cove_eligible=True, min_evidence_count=2,
+                default_time_range_days=90, default_time_range_label="latest_quarter",
             ),
             _make_policy(
-                "eps_dividend_review",
-                "earnings_eps_dividend",
+                "eps_dividend_review", "earnings_eps_dividend",
                 cove_eligible=True,
+                default_time_range_days=365, default_time_range_label="1y",
             ),
             _make_policy(
-                "monthly_revenue_yoy_review",
-                "earnings_monthly_revenue",
+                "monthly_revenue_yoy_review", "earnings_monthly_revenue",
                 cove_eligible=True,
+                default_time_range_days=365, default_time_range_label="1y",
             ),
             _make_policy(
-                "margin_turnaround_review",
-                "earnings_margin_turnaround",
+                "margin_turnaround_review", "earnings_margin_turnaround",
                 cove_eligible=True,
+                default_time_range_days=90, default_time_range_label="latest_quarter",
             ),
 
             # ── VALUATION_CHECK 類 ─────────────────────────────────────────
             _make_policy(
-                "pe_valuation_review",
-                "valuation_pe_only",
+                "pe_valuation_review", "valuation_pe_only",
                 cove_eligible=True,
+                default_time_range_days=365, default_time_range_label="1y",
             ),
             _make_policy(
-                "fundamental_pe_review",
-                "valuation_fundamental",
+                "fundamental_pe_review", "valuation_fundamental",
                 cove_eligible=True,
+                default_time_range_days=365, default_time_range_label="1y",
             ),
-            _make_policy("price_range",   "valuation_price_range"),
-            _make_policy("price_outlook", "valuation_price_outlook"),
+            _make_policy("price_range", "valuation_price_range",
+                default_time_range_days=7, default_time_range_label="7d"),
+            _make_policy("price_outlook", "valuation_price_outlook",
+                default_time_range_days=30, default_time_range_label="30d"),
 
             # ── DIVIDEND_ANALYSIS 類 ──────────────────────────────────────
-            _make_policy("dividend_yield_review",            "dividend_yield"),
-            _make_policy("ex_dividend_performance",          "dividend_ex"),
+            _make_policy("dividend_yield_review", "dividend_yield",
+                default_time_range_days=365, default_time_range_label="1y"),
+            _make_policy("ex_dividend_performance", "dividend_ex",
+                default_time_range_days=365, default_time_range_label="1y"),
             _make_policy(
-                "fcf_dividend_sustainability_review",
-                "dividend_fcf",
+                "fcf_dividend_sustainability_review", "dividend_fcf",
                 cove_eligible=True,
                 extra_required=frozenset({DataFacet.CASH_FLOW}),
+                default_time_range_days=1095, default_time_range_label="3y",
             ),
             _make_policy(
-                "debt_dividend_safety_review",
-                "dividend_debt",
+                "debt_dividend_safety_review", "dividend_debt",
                 cove_eligible=True,
                 extra_required=frozenset({DataFacet.BALANCE_SHEET}),
+                default_time_range_days=1095, default_time_range_label="3y",
             ),
 
             # ── FINANCIAL_HEALTH 類 ───────────────────────────────────────
             _make_policy(
-                "profitability_stability_review",
-                "health_profitability",
-                cove_eligible=True,
-                min_evidence_count=2,
+                "profitability_stability_review", "health_profitability",
+                cove_eligible=True, min_evidence_count=2,
+                default_time_range_days=1825, default_time_range_label="5y",
             ),
             _make_policy(
-                "gross_margin_comparison_review",
-                "health_gross_margin_cmp",
+                "gross_margin_comparison_review", "health_gross_margin_cmp",
                 cove_eligible=True,
+                default_time_range_days=90, default_time_range_label="latest_quarter",
             ),
             _make_policy(
-                "revenue_growth_review",
-                "health_revenue_growth",
+                "revenue_growth_review", "health_revenue_growth",
                 cove_eligible=True,
+                default_time_range_days=90, default_time_range_label="latest_quarter",
             ),
 
             # ── TECHNICAL_VIEW 類 ─────────────────────────────────────────
-            _make_policy("technical_indicator_review", "technical_indicators"),
-            _make_policy("season_line_margin_review",  "technical_margin_flow"),
+            _make_policy("technical_indicator_review", "technical_indicators",
+                default_time_range_days=30, default_time_range_label="30d"),
+            _make_policy("season_line_margin_review", "technical_margin_flow",
+                default_time_range_days=90, default_time_range_label="90d"),
 
             # ── INVESTMENT_ASSESSMENT 類 ──────────────────────────────────
             _make_policy(
-                "investment_support",
-                "investment_support",
-                cove_eligible=True,
-                min_evidence_count=3,
+                "investment_support", "investment_support",
+                cove_eligible=True, min_evidence_count=3,
+                default_time_range_days=7, default_time_range_label="7d",
             ),
-            _make_policy("risk_review",          "investment_risk"),
-            _make_policy("announcement_summary", "investment_announcement"),
+            _make_policy("risk_review", "investment_risk",
+                default_time_range_days=7, default_time_range_label="7d"),
+            _make_policy("announcement_summary", "investment_announcement",
+                default_time_range_days=7, default_time_range_label="7d"),
         ]
 
         for policy in policies:
