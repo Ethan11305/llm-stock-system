@@ -1,0 +1,9 @@
+from typing import Protocol
+
+from llm_stock_system.core.models import GovernanceReport, StructuredQuery
+
+
+class IntentStrategy(Protocol):
+    def build_summary(self, query: StructuredQuery, report: GovernanceReport) -> str: ...
+    def build_impacts(self, query: StructuredQuery) -> list[str]: ...
+    def build_risks(self, query: StructuredQuery, report: GovernanceReport) -> list[str]: ...

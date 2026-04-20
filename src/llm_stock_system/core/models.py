@@ -241,6 +241,7 @@ class StructuredQuery(BaseModel):
     tag_source: str = "empty"
     question_type: str = "market_summary"
     stance_bias: StanceBias = StanceBias.NEUTRAL
+    classifier_source: str = "rule"  # "rule" | "llm" | "mixed"
     # --- Forecast semantic fields ---
     is_forecast_query: bool = False
     wants_direction: bool = False

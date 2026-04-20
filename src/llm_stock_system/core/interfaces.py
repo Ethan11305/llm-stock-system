@@ -63,6 +63,29 @@ class LLMClient(Protocol):
         ...
 
 
+class QueryClassifier(Protocol):
+    """LLM 驅動的查詢分類器。
+
+    負責將使用者自由文字轉為語意欄位，讓 InputLayer 擺脫上百行關鍵字比對。
+    失敗時必須回傳 None，由 InputLayer 降級成 rule-based 判斷。
+
+    回傳 dict 應包含（每個欄位皆可為 None／缺省，由 InputLayer 逐欄驗證）：
+      - intent:                Intent 字串，例如 "valuation_check"
+      - question_type:         QUESTION_TYPE_TO_INTENT 的合法 key
+      - topic_tags:             list[str]，每個必須是 TopicTag enum 的中文值
+      - time_range_label:       "1d"|"7d"|"30d"|"latest_quarter"|"1y"|"3y"|"5y"
+      - stance_bias:            "bullish"|"bearish"|"neutral"
+      - is_forecast_query:      bool
+      - wants_direction:        bool
+      - wants_scenario_range:   bool
+      - forecast_horizon_label: str | None
+      - forecast_horizon_days:  int | None
+    """
+
+    def classify(self, query_text: str) -> dict | None:
+        ...
+
+
 class PromptLoader(Protocol):
     def load(self, path: Path) -> str:
         ...

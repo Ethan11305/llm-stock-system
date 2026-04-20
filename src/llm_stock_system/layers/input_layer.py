@@ -3,13 +3,24 @@ from __future__ import annotations
 import re
 
 from llm_stock_system.core.enums import StanceBias, Topic, TopicTag
-from llm_stock_system.core.interfaces import StockResolver
+from llm_stock_system.core.interfaces import QueryClassifier, StockResolver
 from llm_stock_system.core.models import (
     QUESTION_TYPE_TO_INTENT,
     QueryRequest,
     StructuredQuery,
     infer_intent_from_question_type,
 )
+
+_VALID_QUESTION_TYPES: frozenset[str] = frozenset(QUESTION_TYPE_TO_INTENT.keys())
+_VALID_TIME_RANGE_LABELS: frozenset[str] = frozenset(
+    {"1d", "7d", "30d", "latest_quarter", "1y", "3y", "5y"}
+)
+_VALID_TOPIC_TAG_VALUES: frozenset[str] = frozenset(tag.value for tag in TopicTag)
+_VALID_STANCE_VALUES: frozenset[str] = frozenset(bias.value for bias in StanceBias)
+_TIME_RANGE_DAYS: dict[str, int] = {
+    "1d": 1, "7d": 7, "30d": 30, "latest_quarter": 90,
+    "1y": 365, "3y": 1095, "5y": 1825,
+}
 
 
 class InputLayer:
@@ -598,8 +609,13 @@ class InputLayer:
         ),
     }
 
-    def __init__(self, stock_resolver: StockResolver | None = None) -> None:
+    def __init__(
+        self,
+        stock_resolver: StockResolver | None = None,
+        classifier: QueryClassifier | None = None,
+    ) -> None:
         self._stock_resolver = stock_resolver
+        self._classifier = classifier
 
     def parse(self, request: QueryRequest) -> StructuredQuery:
         query_text = request.query.strip()
@@ -645,22 +661,10 @@ class InputLayer:
                 if resolved_ticker == ticker:
                     company_name = resolved_company_name
 
-        topic = request.topic or self._detect_topic(query_text)
-        question_type = self._detect_question_type(query_text, topic, len(stock_mentions))
-        intent = infer_intent_from_question_type(question_type)
-        controlled_tags, free_keywords = self._extract_topic_tags(query_text, question_type)
-        tag_source = "matched" if controlled_tags else "fallback" if free_keywords else "empty"
-        time_range_label, time_range_days = self._detect_time_range(
-            query_text,
-            request.time_range,
-            topic,
-            question_type,
-        )
-        stance_bias = self._detect_stance_bias(query_text)
-
-        # --- Forecast semantic fields ---
-        is_forecast, wants_dir, wants_range, horizon_label, horizon_days = (
-            self._detect_forecast_semantics(query_text, question_type)
+        classification = self._classify_semantics(
+            query_text=query_text,
+            request=request,
+            stock_mention_count=len(stock_mentions),
         )
 
         return StructuredQuery(
@@ -669,21 +673,187 @@ class InputLayer:
             company_name=company_name,
             comparison_ticker=comparison_ticker,
             comparison_company_name=comparison_company_name,
-            topic=topic,
-            time_range_label=time_range_label,
-            time_range_days=time_range_days,
-            intent=intent,
-            controlled_tags=controlled_tags,
-            free_keywords=free_keywords,
-            tag_source=tag_source,
-            question_type=question_type,
-            stance_bias=stance_bias,
-            is_forecast_query=is_forecast,
-            wants_direction=wants_dir,
-            wants_scenario_range=wants_range,
-            forecast_horizon_label=horizon_label,
-            forecast_horizon_days=horizon_days,
+            topic=classification["topic"],
+            time_range_label=classification["time_range_label"],
+            time_range_days=classification["time_range_days"],
+            intent=classification["intent"],
+            controlled_tags=classification["controlled_tags"],
+            free_keywords=classification["free_keywords"],
+            tag_source=classification["tag_source"],
+            question_type=classification["question_type"],
+            stance_bias=classification["stance_bias"],
+            classifier_source=classification["classifier_source"],
+            is_forecast_query=classification["is_forecast_query"],
+            wants_direction=classification["wants_direction"],
+            wants_scenario_range=classification["wants_scenario_range"],
+            forecast_horizon_label=classification["forecast_horizon_label"],
+            forecast_horizon_days=classification["forecast_horizon_days"],
         )
+
+    def _classify_semantics(
+        self,
+        query_text: str,
+        request: QueryRequest,
+        stock_mention_count: int,
+    ) -> dict:
+        """LLM-first + B2 per-field validation。
+
+        流程：
+          1. 先呼叫規則產出所有欄位（always，作為 fallback source of truth）
+          2. 若 self._classifier 存在，呼叫 LLM 取得候選值
+          3. 對 LLM 每個欄位獨立驗證，合法就採用、否則沿用規則
+          4. 根據「多少欄位最終來自 LLM」決定 classifier_source
+        """
+        # ── Rule-based fallback values (always computed) ──
+        topic = request.topic or self._detect_topic(query_text)
+        rule_qtype = self._detect_question_type(query_text, topic, stock_mention_count)
+        rule_time_label, rule_time_days = self._detect_time_range(
+            query_text, request.time_range, topic, rule_qtype,
+        )
+        rule_stance = self._detect_stance_bias(query_text)
+        rule_is_fc, rule_dir, rule_range, rule_hz_label, rule_hz_days = (
+            self._detect_forecast_semantics(query_text, rule_qtype)
+        )
+
+        # ── LLM classification (None = pure rule mode) ──
+        llm_result: dict | None = None
+        if self._classifier is not None:
+            llm_result = self._classifier.classify(query_text)
+            if not isinstance(llm_result, dict):
+                llm_result = None
+
+        # 預設值：任何欄位只在 LLM 值通過驗證時才覆蓋 rule 結果。
+        final_qtype: str = rule_qtype
+        final_topic_tag_values: list[str] | None = None  # None = 沿用規則的 controlled/free
+        final_time_label: str = rule_time_label
+        final_stance: StanceBias = rule_stance
+        final_is_fc: bool = rule_is_fc
+        final_dir: bool = rule_dir
+        final_range: bool = rule_range
+        final_hz_label: str | None = rule_hz_label
+        final_hz_days: int | None = rule_hz_days
+        llm_used_count = 0
+        rule_used_count = 0
+
+        if llm_result is not None:
+            def pick(llm_value, rule_value, validator, transform=lambda value: value):
+                if validator(llm_value):
+                    return transform(llm_value), True
+                return rule_value, False
+
+            final_qtype, used_llm = pick(
+                llm_result.get("question_type"),
+                rule_qtype,
+                lambda value: value in _VALID_QUESTION_TYPES,
+            )
+            llm_used_count += int(used_llm)
+            rule_used_count += int(not used_llm)
+            filtered_topic_tags = (
+                list(
+                    dict.fromkeys(
+                        tag
+                        for tag in llm_result.get("topic_tags", [])
+                        if isinstance(tag, str) and tag in _VALID_TOPIC_TAG_VALUES
+                    )
+                )
+                if isinstance(llm_result.get("topic_tags"), list)
+                else []
+            )
+            final_topic_tag_values, used_llm = (filtered_topic_tags, True) if filtered_topic_tags else (None, False)
+            llm_used_count += int(used_llm)
+            rule_used_count += int(not used_llm)
+            final_time_label, used_llm = pick(
+                llm_result.get("time_range_label"),
+                rule_time_label,
+                lambda value: value in _VALID_TIME_RANGE_LABELS,
+            )
+            llm_used_count += int(used_llm)
+            rule_used_count += int(not used_llm)
+            final_stance, used_llm = pick(
+                llm_result.get("stance_bias"),
+                rule_stance,
+                lambda value: value in _VALID_STANCE_VALUES,
+                StanceBias,
+            )
+            llm_used_count += int(used_llm)
+            rule_used_count += int(not used_llm)
+            final_is_fc, used_llm = pick(
+                llm_result.get("is_forecast_query"),
+                rule_is_fc,
+                lambda value: isinstance(value, bool),
+            )
+            llm_used_count += int(used_llm)
+            rule_used_count += int(not used_llm)
+            final_dir, used_llm = pick(
+                llm_result.get("wants_direction"),
+                rule_dir,
+                lambda value: isinstance(value, bool),
+            )
+            llm_used_count += int(used_llm)
+            rule_used_count += int(not used_llm)
+            final_range, used_llm = pick(
+                llm_result.get("wants_scenario_range"),
+                rule_range,
+                lambda value: isinstance(value, bool),
+            )
+            llm_used_count += int(used_llm)
+            rule_used_count += int(not used_llm)
+            final_hz_label, used_llm = pick(
+                llm_result.get("forecast_horizon_label"),
+                rule_hz_label,
+                lambda value: value is None or isinstance(value, str),
+            )
+            llm_used_count += int(used_llm)
+            rule_used_count += int(not used_llm)
+            final_hz_days, used_llm = pick(
+                llm_result.get("forecast_horizon_days"),
+                rule_hz_days,
+                lambda value: value is None or (
+                    isinstance(value, int)
+                    and not isinstance(value, bool)
+                    and value > 0
+                ),
+            )
+            llm_used_count += int(used_llm)
+            rule_used_count += int(not used_llm)
+
+        # ── 組裝衍生欄位 ──
+        intent = infer_intent_from_question_type(final_qtype)
+        final_time_days = _TIME_RANGE_DAYS.get(final_time_label, rule_time_days)
+
+        # topic_tags：若 LLM 提供合法清單，轉為 TopicTag；否則用規則抽取
+        if final_topic_tag_values is not None:
+            controlled_tags = [TopicTag(v) for v in final_topic_tag_values]
+            free_keywords: list[str] = []
+        else:
+            controlled_tags, free_keywords = self._extract_topic_tags(query_text, final_qtype)
+        tag_source = "matched" if controlled_tags else "fallback" if free_keywords else "empty"
+
+        # ── classifier_source 判定 ──
+        if self._classifier is None or llm_result is None:
+            classifier_source = "rule"
+        elif rule_used_count == 0:
+            classifier_source = "llm"
+        else:
+            classifier_source = "mixed"
+
+        return {
+            "topic": topic,
+            "question_type": final_qtype,
+            "intent": intent,
+            "controlled_tags": controlled_tags,
+            "free_keywords": free_keywords,
+            "tag_source": tag_source,
+            "time_range_label": final_time_label,
+            "time_range_days": final_time_days,
+            "stance_bias": final_stance,
+            "classifier_source": classifier_source,
+            "is_forecast_query": final_is_fc,
+            "wants_direction": final_dir,
+            "wants_scenario_range": final_range,
+            "forecast_horizon_label": final_hz_label,
+            "forecast_horizon_days": final_hz_days,
+        }
 
     def _extract_ticker(self, query: str) -> str | None:
         match = re.search(r"(?<!\d)(\d{4,6})(?!\d)", query)

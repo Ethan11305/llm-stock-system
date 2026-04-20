@@ -109,18 +109,25 @@ def _validate_fundamental_valuation(
 ) -> float:
     from llm_stock_system.core.fundamental_valuation import has_fundamental_evidence, has_valuation_evidence
 
-    if not has_fundamental_evidence(governance_report):
+    has_fundamental = has_fundamental_evidence(governance_report)
+    has_valuation = has_valuation_evidence(governance_report)
+
+    if not has_fundamental:
         warnings.append(
             "Combined fundamental and valuation review is missing "
             "direct fundamental evidence "
             "(facet-based cap already applied if sync failed)."
         )
-    if not has_valuation_evidence(governance_report):
+    if not has_valuation:
         warnings.append(
             "Combined fundamental and valuation review is missing "
             "direct valuation evidence "
             "(facet-based cap already applied if sync failed)."
         )
+    if not has_fundamental and not has_valuation:
+        return min(confidence_score, 0.50)
+    if not has_fundamental or not has_valuation:
+        return min(confidence_score, 0.75)
     return confidence_score
 
 
