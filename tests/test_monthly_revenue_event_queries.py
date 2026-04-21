@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 import unittest
 
 from llm_stock_system.adapters.llm import RuleBasedSynthesisClient
-from llm_stock_system.core.enums import FreshnessStatus, ConsistencyStatus, SourceTier, SufficiencyStatus
+from llm_stock_system.core.enums import FreshnessStatus, ConsistencyStatus, Intent, SourceTier, SufficiencyStatus
 from llm_stock_system.core.models import Evidence, GovernanceReport, QueryRequest
 from llm_stock_system.layers.input_layer import InputLayer
 from llm_stock_system.services.query_data_hydrator import QueryDataHydrator
@@ -34,7 +34,7 @@ class MonthlyRevenueEventQueryTestCase(unittest.TestCase):
         )
 
         self.assertEqual(query.ticker, "3035")
-        self.assertEqual(query.question_type, "monthly_revenue_yoy_review")
+        self.assertEqual(query.intent, Intent.EARNINGS_REVIEW)
         self.assertEqual(query.time_range_days, 365)
 
     def test_rule_based_summary_explains_future_month_not_published(self) -> None:

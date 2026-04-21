@@ -4,12 +4,6 @@ import httpx
 
 from llm_stock_system.adapters.llm import RuleBasedSynthesisClient
 from llm_stock_system.core.enums import Intent
-from llm_stock_system.core.fundamental_valuation import (
-    build_fundamental_valuation_facts,
-    build_fundamental_valuation_highlights,
-    build_fundamental_valuation_summary,
-    is_fundamental_valuation_question,
-)
 from llm_stock_system.core.interfaces import LLMClient
 from llm_stock_system.core.models import (
     AnswerDraft,
@@ -17,24 +11,14 @@ from llm_stock_system.core.models import (
     SourceCitation,
     StructuredQuery,
 )
-from llm_stock_system.core.forecast import (
-    apply_forecast_guardrail,
-    apply_forecast_guardrail_to_list,
-    build_forecast_block,
-)
-from llm_stock_system.core.target_price import (
-    build_forward_price_fact,
-    build_forward_price_highlight,
-    build_forward_price_summary,
-    is_forward_price_question,
-)
 
 
 class OpenAIResponsesSynthesisClient(LLMClient):
     """LLM-backed synthesizer.
 
-    Phase 4: user prompt routes on ``intent`` + ``topic_tags``; ``question_type``
-    is no longer included in any prompt sent to the LLM.
+    Wave 4: user prompt routes on ``intent`` + ``controlled_tags``.
+    question_type has been sunset across Input/Validation/Synthesis paths and
+    is no longer surfaced to the LLM in any instruction or schema.
     """
 
     _INTENT_INSTRUCTIONS: dict[Intent, list[str]] = {
@@ -51,12 +35,6 @@ class OpenAIResponsesSynthesisClient(LLMClient):
             "If topic tags include '月營收', highlight MoM and YoY revenue change and whether it hit a recent high.",
             "If topic tags include '毛利率', explicitly address whether gross margin has turned positive and whether operating income followed.",
         ],
-        Intent.VALUATION_CHECK: [
-            "Focus: assess current valuation relative to historical range and peers.",
-            "State the current PE ratio and its historical percentile position when evidence is available.",
-            "If topic tags include '基本面', combine valuation with fundamental quality indicators.",
-            "For forward price questions, anchor to analyst target prices or price-level evidence and do not fabricate numbers.",
-        ],
         Intent.DIVIDEND_ANALYSIS: [
             "Focus: assess dividend yield, payout sustainability, and coverage ratios.",
             "If topic tags include '現金流', address whether free cash flow covers dividend payments over the past few years.",
@@ -71,11 +49,6 @@ class OpenAIResponsesSynthesisClient(LLMClient):
             "Focus: summarize price position relative to moving averages and key technical indicators.",
             "If topic tags include '籌碼', include margin balance and utilization rate alongside price data.",
             "Report RSI14, KD, MACD trend, and Bollinger position if available in the evidence.",
-        ],
-        Intent.INVESTMENT_ASSESSMENT: [
-            "Focus: provide a balanced investment thesis combining fundamentals, valuation, and risk factors.",
-            "Include at least three distinct risk reminders.",
-            "If evidence covers both fundamental and valuation data, integrate both in the summary.",
         ],
     }
     def __init__(
@@ -101,17 +74,9 @@ class OpenAIResponsesSynthesisClient(LLMClient):
             if self._preliminary_answers_enabled:
                 preliminary_draft = self._synthesize_preliminary(query, system_prompt)
                 if preliminary_draft is not None:
-                    if query.is_forecast_query and preliminary_draft.forecast is None:
-                        preliminary_draft.forecast = build_forecast_block(query, governance_report)
                     return preliminary_draft
-                fallback = self._build_local_preliminary_fallback(query)
-                if query.is_forecast_query:
-                    fallback.forecast = build_forecast_block(query, governance_report)
-                return fallback
-            draft = self._fallback_client.synthesize(query, governance_report, system_prompt)
-            if query.is_forecast_query:
-                draft.forecast = build_forecast_block(query, governance_report)
-            return draft
+                return self._build_local_preliminary_fallback(query)
+            return self._fallback_client.synthesize(query, governance_report, system_prompt)
 
         sources = [
             SourceCitation(
@@ -141,25 +106,12 @@ class OpenAIResponsesSynthesisClient(LLMClient):
             response_json = self._request(self._build_payload(system_prompt, user_prompt))
             text_output = self._extract_text(response_json)
             parsed = self._parse_json_block(text_output)
-            parsed = self._apply_target_price_guardrails(query, governance_report, parsed)
-            parsed = self._apply_fundamental_valuation_guardrails(query, governance_report, parsed)
         except (httpx.HTTPError, ValueError, json.JSONDecodeError):
-            draft = self._fallback_client.synthesize(query, governance_report, system_prompt)
-            if query.is_forecast_query:
-                draft.forecast = build_forecast_block(query, governance_report)
-            return draft
+            return self._fallback_client.synthesize(query, governance_report, system_prompt)
 
         summary = self._coerce_string(parsed.get("summary"), "資料不足，無法確認。")
-
-        # Build forecast block for forecast queries and apply guardrails
-        forecast_block = None
         highlights = self._coerce_list(parsed.get("highlights"))
         facts = self._coerce_list(parsed.get("facts"))
-        if query.is_forecast_query:
-            forecast_block = build_forecast_block(query, governance_report)
-            summary = apply_forecast_guardrail(summary, forecast_block)
-            highlights = apply_forecast_guardrail_to_list(highlights, forecast_block)
-            facts = apply_forecast_guardrail_to_list(facts, forecast_block)
 
         return AnswerDraft(
             summary=summary,
@@ -168,7 +120,6 @@ class OpenAIResponsesSynthesisClient(LLMClient):
             impacts=self._coerce_list(parsed.get("impacts")),
             risks=self._coerce_list(parsed.get("risks")),
             sources=sources,
-            forecast=forecast_block,
         )
 
     def _synthesize_preliminary(
@@ -275,26 +226,7 @@ class OpenAIResponsesSynthesisClient(LLMClient):
     def _build_intent_instructions(self, query: StructuredQuery) -> list[str]:
         base = self._INTENT_INSTRUCTIONS.get(query.intent, [])
         tag_hint = f"Active topic tags: {', '.join(query.topic_tags)}" if query.topic_tags else ""
-        lines = [line for line in ([tag_hint] + base) if line]
-
-        # Inject forecast-specific hard rules
-        if query.is_forecast_query:
-            forecast_rules = [
-                "FORECAST RULES (mandatory):",
-                "- This is a forward-looking forecast query. Start the summary by stating the forecast window and date range.",
-                "- Clearly distinguish between 'future scenario estimate' and 'historical fact'.",
-                "- Do NOT present historical high/low points as future predictions.",
-                "- Use scenario language: '情境推估', '可能', '偏向' — never '一定會', '肯定', '必定'.",
-                "- State the direction tendency (偏多/偏空/區間震盪/無法判定) explicitly.",
-                "- If using historical price data as proxy, explicitly say '以近期歷史波動作為代理參考'.",
-                "- Do NOT fabricate specific price numbers or ranges. Only use numbers that appear in the evidence.",
-                "- If no price range can be derived from evidence, say '目前無法提供具體價格區間' instead of inventing numbers.",
-            ]
-            if query.forecast_horizon_label:
-                forecast_rules.append(f"- Forecast window label: {query.forecast_horizon_label}")
-            lines.extend(forecast_rules)
-
-        return lines
+        return [line for line in ([tag_hint] + base) if line]
 
     def _build_local_preliminary_fallback(self, query: StructuredQuery) -> AnswerDraft:
         label = query.company_name or query.ticker or "此標的"
@@ -375,43 +307,6 @@ class OpenAIResponsesSynthesisClient(LLMClient):
         if start != -1 and end != -1 and start < end:
             return json.loads(stripped[start : end + 1])
         raise ValueError("OpenAI response did not contain a JSON object")
-
-    def _apply_target_price_guardrails(
-        self,
-        query: StructuredQuery,
-        governance_report: GovernanceReport,
-        parsed: dict,
-    ) -> dict:
-        if query.intent != Intent.VALUATION_CHECK or not is_forward_price_question(query):
-            return parsed
-
-        guarded = dict(parsed)
-        guarded["summary"] = build_forward_price_summary(query, governance_report)
-
-        highlights = self._coerce_list(parsed.get("highlights"))
-        facts = self._coerce_list(parsed.get("facts"))
-
-        target_highlight = build_forward_price_highlight(query, governance_report)
-        target_fact = build_forward_price_fact(query, governance_report)
-
-        guarded["highlights"] = [target_highlight, *highlights][:3]
-        guarded["facts"] = [target_fact, *facts][:3]
-        return guarded
-
-    def _apply_fundamental_valuation_guardrails(
-        self,
-        query: StructuredQuery,
-        governance_report: GovernanceReport,
-        parsed: dict,
-    ) -> dict:
-        if not is_fundamental_valuation_question(query):
-            return parsed
-
-        guarded = dict(parsed)
-        guarded["summary"] = build_fundamental_valuation_summary(query, governance_report)
-        guarded["highlights"] = build_fundamental_valuation_highlights(query, governance_report)
-        guarded["facts"] = build_fundamental_valuation_facts(query, governance_report)
-        return guarded
 
     def _coerce_list(self, value) -> list[str]:
         if isinstance(value, list):

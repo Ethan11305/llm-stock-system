@@ -102,15 +102,9 @@ class DigestInputLayerTestCase(unittest.TestCase):
         fake = _FakeClassifier(
             payload={
                 "intent": "news_digest",
-                "question_type": "market_summary",
                 "topic_tags": [TopicTag.EVENT.value],
                 "time_range_label": "30d",
                 "stance_bias": "neutral",
-                "is_forecast_query": False,
-                "wants_direction": False,
-                "wants_scenario_range": False,
-                "forecast_horizon_label": None,
-                "forecast_horizon_days": None,
             }
         )
         layer = DigestInputLayer(classifier=fake)

@@ -1,8 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
-from llm_stock_system.core.enums import Intent, SourceTier, Topic
-from llm_stock_system.core.fundamental_valuation import is_fundamental_valuation_question
+from llm_stock_system.core.enums import Intent, SourceTier, Topic, TopicTag
 from llm_stock_system.core.interfaces import DocumentRepository, QueryLogStore
 from llm_stock_system.core.models import (
     Document,
@@ -115,8 +114,14 @@ class InMemoryDocumentRepository(DocumentRepository):
 
     def _prefers_valuation_documents(self, query: StructuredQuery) -> bool:
         tags = self._topic_tags(query)
+        # Wave 2：不再經 is_fundamental_valuation_question 判斷，改用 tag 直接命中
+        valuation_tags = {
+            TopicTag.VALUATION.value,
+            TopicTag.FUNDAMENTAL.value,
+            "投資評估",
+        }
         return (
-            is_fundamental_valuation_question(query)
+            bool(tags & valuation_tags)
             or "股價區間" in tags
             or ("股價" in tags and "展望" in tags)
         )

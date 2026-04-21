@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 import unittest
 
-from llm_stock_system.core.enums import ConsistencyStatus, FreshnessStatus, SourceTier, SufficiencyStatus
+from llm_stock_system.core.enums import ConsistencyStatus, FreshnessStatus, Intent, SourceTier, SufficiencyStatus, TopicTag
 from llm_stock_system.core.models import AnswerDraft, Evidence, GovernanceReport, SourceCitation, StructuredQuery
 from llm_stock_system.core.validation_profiles import get_profile
 from llm_stock_system.layers.validation_layer import ValidationLayer
@@ -10,12 +10,24 @@ from llm_stock_system.layers.validation_layer import ValidationLayer
 UTC_NOW = datetime(2026, 4, 16, tzinfo=timezone.utc)
 
 
-def build_query(question_type: str, **overrides) -> StructuredQuery:
+_SIGNATURE_TO_INTENT: dict[str, Intent] = {
+    "technical_indicator_review": Intent.TECHNICAL_VIEW,
+    "monthly_revenue_yoy_review": Intent.EARNINGS_REVIEW,
+}
+
+_SIGNATURE_TO_CONTROLLED_TAGS: dict[str, list[TopicTag]] = {
+    "technical_indicator_review": [TopicTag.TECHNICAL],
+    "monthly_revenue_yoy_review": [TopicTag.REVENUE],
+}
+
+
+def build_query(rule_signature: str, **overrides) -> StructuredQuery:
     defaults = {
-        "user_query": f"validate {question_type}",
+        "user_query": f"validate {rule_signature}",
         "ticker": "2330",
         "company_name": "TSMC",
-        "question_type": question_type,
+        "intent": _SIGNATURE_TO_INTENT[rule_signature],
+        "controlled_tags": list(_SIGNATURE_TO_CONTROLLED_TAGS.get(rule_signature, [])),
         "time_range_label": "1y",
         "time_range_days": 365,
     }
@@ -99,60 +111,6 @@ class ValidationRuleEngineTestCase(unittest.TestCase):
         self.assertEqual(score, 1.0)
         self.assertEqual(len(warnings), 1)
         self.assertIn("no price evidence", warnings[0])
-
-    def test_dual_signal_profile_caps_to_yellow(self) -> None:
-        query = build_query("season_line_margin_review")
-        profile = get_profile(query.intent)
-        assert profile is not None
-        evidence = [
-            build_evidence("FinMind TaiwanStockPrice", "Price snapshot 1", "price trend remains weak"),
-            build_evidence("FinMind TaiwanStockPrice", "Price snapshot 2", "price remains below season line"),
-            build_evidence("FinMind TaiwanStockPrice", "Price snapshot 3", "price volume remains active"),
-            build_evidence("FinMind TaiwanStockPrice", "Price snapshot 4", "price volatility remains elevated"),
-        ]
-        warnings: list[str] = []
-
-        score = self.validation._evaluate_profile(
-            profile,
-            query,
-            build_governance_report(evidence),
-            build_answer_draft("Partial season-line review.", evidence),
-            1.0,
-            warnings,
-        )
-
-        self.assertEqual(score, 0.5)
-        self.assertEqual(len(warnings), 1)
-        self.assertIn("missing one of price or margin evidence", warnings[0])
-
-    def test_custom_validator_profile_caps_target_price_context(self) -> None:
-        query = build_query(
-            "price_outlook",
-            user_query="TSMC 未來一年目標價是多少？",
-        )
-        profile = get_profile(query.intent)
-        assert profile is not None
-        evidence = [
-            build_evidence("Broker research", "Analyst update", "法人目標價上看 1280 元"),
-            build_evidence("Broker research", "Valuation note", "target price 1280 based on demand recovery"),
-            build_evidence("TWSE valuation", "Valuation snapshot", "valuation percentile 62% and PE ratio 18.2"),
-            build_evidence("FinMind TaiwanStockPrice", "Price snapshot", "price history remains stable"),
-        ]
-        warnings: list[str] = []
-
-        score = self.validation._evaluate_profile(
-            profile,
-            query,
-            build_governance_report(evidence),
-            build_answer_draft("Forward-looking price view.", evidence),
-            1.0,
-            warnings,
-        )
-
-        self.assertEqual(score, 0.55)
-        self.assertEqual(len(warnings), 1)
-        self.assertIn("scenario-dependent", warnings[0])
-
 
 if __name__ == "__main__":
     unittest.main()

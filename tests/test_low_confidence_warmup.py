@@ -3,7 +3,7 @@ import unittest
 
 from llm_stock_system.adapters.llm import RuleBasedSynthesisClient
 from llm_stock_system.adapters.repositories import InMemoryQueryLogStore
-from llm_stock_system.core.enums import ConfidenceLight
+from llm_stock_system.core.enums import ConfidenceLight, Intent
 from llm_stock_system.core.models import QueryRequest, StructuredQuery, ValidationResult
 from llm_stock_system.layers.data_governance_layer import DataGovernanceLayer
 from llm_stock_system.layers.generation_layer import GenerationLayer
@@ -97,7 +97,7 @@ class LowConfidenceWarmupTestCase(unittest.TestCase):
             user_query="宏碁(2353) 負債比率是否突然升高？現金還夠不夠發股利？",
             ticker="2353",
             company_name="宏碁",
-            question_type="debt_dividend_safety_review",
+            intent=Intent.DIVIDEND_ANALYSIS,
             time_range_label="3y",
             time_range_days=1095,
         )
@@ -136,7 +136,7 @@ class LowConfidenceWarmupTestCase(unittest.TestCase):
             user_query="中華電(2412) 本益比是否在高位？",
             ticker="2412",
             company_name="中華電信",
-            question_type="pe_valuation_review",
+            intent=Intent.VALUATION_CHECK,
             time_range_label="1y",
             time_range_days=365,
         )

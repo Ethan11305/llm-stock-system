@@ -10,6 +10,7 @@ from llm_stock_system.layers.presentation_layer import PresentationLayer
 from llm_stock_system.layers.retrieval_layer import RetrievalLayer
 from llm_stock_system.layers.validation_layer import ValidationLayer
 from llm_stock_system.orchestrator.pipeline import QueryPipeline
+from llm_stock_system.core.enums import Intent
 from llm_stock_system.core.models import QueryRequest
 from llm_stock_system.sample_data.documents import SAMPLE_DOCUMENTS
 
@@ -44,7 +45,7 @@ class StockResolutionConflictTestCase(unittest.TestCase):
         self.assertEqual(query.ticker, "2371")
         self.assertEqual(query.company_name, "大同")
         self.assertIsNone(query.comparison_ticker)
-        self.assertEqual(query.question_type, "announcement_summary")
+        self.assertEqual(query.intent, Intent.INVESTMENT_ASSESSMENT)
 
     def test_pipeline_does_not_leak_conflicting_ticker_documents(self) -> None:
         pipeline = build_pipeline()

@@ -89,29 +89,26 @@ class AnnouncementRoutingTestCase(unittest.TestCase):
     def test_tsmc_announcement(self) -> None:
         q = self._parse("台積電 (2330) 有沒有最新的重大公告？")
         self.assertEqual(q.ticker, "2330")
-        self.assertEqual(q.question_type, "announcement_summary")
         self.assertEqual(q.intent, Intent.INVESTMENT_ASSESSMENT)
 
     # ── 鴻海 2317 ──
     def test_foxconn_announcement(self) -> None:
         q = self._parse("鴻海 (2317) 有沒有最新的重大公告？")
         self.assertEqual(q.ticker, "2317")
-        self.assertEqual(q.question_type, "announcement_summary")
         self.assertEqual(q.intent, Intent.INVESTMENT_ASSESSMENT)
 
     # ── 長榮 2603 ──
     def test_evergreen_announcement(self) -> None:
         q = self._parse("長榮 (2603) 近期有什麼公告？")
         self.assertEqual(q.ticker, "2603")
-        self.assertEqual(q.question_type, "announcement_summary")
         self.assertEqual(q.intent, Intent.INVESTMENT_ASSESSMENT)
 
     # ── 補充：同時含「法說會」和「公告」 → COMPOSITE → market_summary（驗證邊界行為）──
     def test_mixed_announcement_and_earnings_falls_back_to_market_summary(self) -> None:
         q = self._parse("台積電 (2330) 最近有什麼重大公告或法說會重點？")
         self.assertEqual(q.ticker, "2330")
-        # 「法說」(EARNINGS) + 「公告」(ANNOUNCEMENT) → 兩 topic 都命中 → COMPOSITE → market_summary
-        self.assertEqual(q.question_type, "market_summary")
+        # 「法說」(EARNINGS) + 「公告」(ANNOUNCEMENT) → 兩 topic 都命中 → COMPOSITE → NEWS_DIGEST
+        self.assertEqual(q.intent, Intent.NEWS_DIGEST)
 
     # ── facet 應包含 FINANCIAL_STATEMENTS 和 PE_VALUATION（INVESTMENT_ASSESSMENT required）──
     def test_announcement_required_facets(self) -> None:

@@ -25,14 +25,18 @@ class TopicTagCoverageTestCase(unittest.TestCase):
         self.assertIn(TopicTag.SEMICON_EQUIP, query.controlled_tags)
         self.assertIn("ASML", query.free_keywords)
 
-    def test_comparison_query_keeps_fallback_tag_alongside_matched_tags(self) -> None:
+    def test_comparison_query_matches_gross_margin_tag(self) -> None:
+        """Wave 4 Stage 6b：舊的 question_type fallback 合併到 free_keywords
+        的行為已移除；此處只驗證 controlled tag 有正確命中毛利率，以及
+        ``tag_source == 'matched'``。原本的 ``"比較"`` fallback 屬於
+        legacy QUESTION_TYPE_FALLBACK_TOPIC_TAGS 路徑，該路徑已整支下架。
+        """
         query = self.input_layer.parse(
             QueryRequest(query="我想比較長榮 (2603) 跟陽明 (2609)，這兩家公司誰的毛利率比較高？這代表哪一家的經營效率比較好？")
         )
 
         self.assertIn(TopicTag.GROSS_MARGIN, query.controlled_tags)
         self.assertIn("毛利率", query.topic_tags)
-        self.assertIn("比較", query.topic_tags)
         self.assertEqual(query.tag_source, "matched")
 
     def test_investment_support_query_falls_back_to_free_keywords(self) -> None:

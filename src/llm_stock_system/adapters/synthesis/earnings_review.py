@@ -1,7 +1,17 @@
+"""Earnings review strategy.
+
+Wave 3 sunset：毛利率轉正 deep-dive（_summarize_margin_turnaround）已下架。
+保留的兩條路徑：
+  * 月營收年增（_summarize_monthly_revenue_yoy）— TWSE 月營收資料是唯一的
+    真實來源，這條仍是 synthesis layer 的核心 fallback。
+  * EPS / 股利（_summarize_earnings_eps）— 當財報 tag 明確時仍會觸發。
+其餘 fallback 交由 build_summary 最後幾行處理。
+"""
+
 from llm_stock_system.core.enums import TopicTag
 from llm_stock_system.core.models import GovernanceReport, StructuredQuery
 
-from .helpers import build_risks_generic, extract_number, extract_text
+from .helpers import extract_number, extract_text
 
 
 class EarningsReviewStrategy:
@@ -9,8 +19,6 @@ class EarningsReviewStrategy:
         tags = set(query.topic_tags)
         label = query.company_name or query.ticker or "此標的"
 
-        if TopicTag.GROSS_MARGIN.value in tags or "轉正" in tags:
-            return self._summarize_margin_turnaround(label, report)
         if TopicTag.REVENUE.value in tags or "月增率" in tags or "年增率" in tags:
             return self._summarize_monthly_revenue_yoy(label, report)
         if "EPS" in tags or "財報" in tags:
@@ -26,12 +34,6 @@ class EarningsReviewStrategy:
 
     def build_impacts(self, query: StructuredQuery) -> list[str]:
         tags = set(query.topic_tags)
-        if TopicTag.GROSS_MARGIN.value in tags or "轉正" in tags:
-            return [
-                "毛利率是否由負轉正，能快速判斷產品組合、報價與成本吸收能力是否有回到健康區間。",
-                "營業利益是否同步轉正，比單看毛利率更能判斷本業是否真的擺脫虧損。",
-                "若毛利率改善但營業利益仍為負，通常代表費用、折舊或稼動率壓力仍在，本業復甦未必已站穩。",
-            ]
         if TopicTag.REVENUE.value in tags or "月增率" in tags or "年增率" in tags:
             return [
                 "月營收累計年增率可以快速觀察公司當年開局的營運動能。",
@@ -46,12 +48,6 @@ class EarningsReviewStrategy:
 
     def build_risks(self, query: StructuredQuery, report: GovernanceReport) -> list[str]:
         tags = set(query.topic_tags)
-        if TopicTag.GROSS_MARGIN.value in tags or "轉正" in tags:
-            return [
-                "毛利率轉正不一定等於整體獲利體質已經穩定改善，仍要看營業利益是否同步回正。",
-                "若營業利益仍為負，代表費用結構、折舊負擔或稼動率壓力可能還在，本業復甦未必已站穩。",
-                "單一季度的轉正也可能受匯率、產品組合或一次性因素影響，還需要連續幾季追蹤。",
-            ]
         if TopicTag.REVENUE.value in tags or "月增率" in tags:
             return [
                 "累計營收年增只反映營收端的變化，不直接代表毛利率或獲利同步改善。",
@@ -65,42 +61,6 @@ class EarningsReviewStrategy:
         ]
 
     # ── private sub-summarizers ─────────────────────────────────────────
-
-    def _summarize_margin_turnaround(self, label: str, report: GovernanceReport) -> str:
-        latest_margin = extract_number(report, r"毛利率約 (-?\d+(?:\.\d+)?)%")
-        previous_margin = extract_number(
-            report, r"上一季（\d{4}-\d{2}-\d{2}）毛利率約 (-?\d+(?:\.\d+)?)%"
-        )
-        latest_operating_income = extract_number(report, r"最新季營業利益約 (-?\d+(?:\.\d+)?) 億元")
-        previous_operating_income = extract_number(report, r"上一季營業利益約 (-?\d+(?:\.\d+)?) 億元")
-        gross_margin_status = extract_text(
-            report,
-            r"(毛利率已由負轉正|毛利率未出現由負轉正，仍維持正值|毛利率仍為負值，尚未轉正|毛利率由正轉負)",
-        )
-        operating_status = extract_text(
-            report,
-            r"(營業利益已同步轉正|營業利益維持正值|營業利益由正轉負|營業利益尚未同步轉正)",
-        )
-        profitability_view = extract_text(
-            report,
-            r"(最新季毛利率已由負轉正，且營業利益也同步轉正，目前可視為本業層面的實質獲利改善|最新季毛利率雖已由負轉正，但營業利益仍未同步轉正，較像本業修復初期，暫時還不能直接視為實質獲利改善|最新季毛利率仍維持正值，但營業利益依舊為負，本業獲利修復仍不完整，目前尚難視為實質獲利改善|雖然營業利益已轉正，但毛利率仍未回到正值，需留意是否有一次性因素扭曲本業判讀|毛利率與營業利益都尚未同時站穩正值，目前仍難視為實質獲利改善)",
-        )
-        if latest_margin is not None and latest_operating_income is not None and gross_margin_status and operating_status:
-            gm_text = gross_margin_status if gross_margin_status.endswith("。") else f"{gross_margin_status}。"
-            op_text = operating_status if operating_status.endswith("。") else f"{operating_status}。"
-            pv_text = profitability_view or ""
-            if pv_text and not pv_text.endswith("。"):
-                pv_text = f"{pv_text}。"
-            summary = (
-                f"{label} 最新季毛利率約 {latest_margin}%，{gm_text}"
-                f"營業利益約 {latest_operating_income} 億元，{op_text}"
-            )
-            if previous_margin is not None and previous_operating_income is not None:
-                summary += f"上一季毛利率約 {previous_margin}%，營業利益約 {previous_operating_income} 億元。"
-            if pv_text:
-                summary += pv_text
-            return summary
-        return f"資料不足，無法確認{label}最新季毛利率是否由負轉正，以及營業利益是否同步轉正。"
 
     def _summarize_monthly_revenue_yoy(self, label: str, report: GovernanceReport) -> str:
         availability_sentence = extract_text(

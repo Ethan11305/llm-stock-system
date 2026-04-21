@@ -3,7 +3,7 @@ import unittest
 
 from llm_stock_system.adapters.llm import RuleBasedSynthesisClient
 from llm_stock_system.adapters.repositories import InMemoryDocumentRepository, InMemoryQueryLogStore
-from llm_stock_system.core.enums import ConfidenceLight, ConsistencyStatus, FreshnessStatus, SourceTier, SufficiencyStatus
+from llm_stock_system.core.enums import ConfidenceLight, ConsistencyStatus, FreshnessStatus, Intent, SourceTier, SufficiencyStatus
 from llm_stock_system.core.models import AnswerDraft, Evidence, GovernanceReport, QueryRequest
 from llm_stock_system.layers.data_governance_layer import DataGovernanceLayer
 from llm_stock_system.layers.generation_layer import GenerationLayer
@@ -41,7 +41,7 @@ class QueryPipelineTestCase(unittest.TestCase):
         )
 
         self.assertEqual(query.ticker, "2603")
-        self.assertEqual(query.question_type, "eps_dividend_review")
+        self.assertEqual(query.intent, Intent.EARNINGS_REVIEW)
         self.assertEqual(query.time_range_days, 365)
 
     def test_input_layer_detects_dividend_yield_review(self) -> None:
@@ -50,7 +50,7 @@ class QueryPipelineTestCase(unittest.TestCase):
         )
 
         self.assertEqual(query.ticker, "2454")
-        self.assertEqual(query.question_type, "dividend_yield_review")
+        self.assertEqual(query.intent, Intent.DIVIDEND_ANALYSIS)
         self.assertEqual(query.time_range_days, 365)
 
     def test_input_layer_detects_ex_dividend_performance(self) -> None:
@@ -59,7 +59,7 @@ class QueryPipelineTestCase(unittest.TestCase):
         )
 
         self.assertEqual(query.ticker, "2618")
-        self.assertEqual(query.question_type, "ex_dividend_performance")
+        self.assertEqual(query.intent, Intent.DIVIDEND_ANALYSIS)
         self.assertEqual(query.time_range_days, 365)
 
     def test_input_layer_detects_technical_indicator_review(self) -> None:
@@ -68,7 +68,7 @@ class QueryPipelineTestCase(unittest.TestCase):
         )
 
         self.assertEqual(query.ticker, "3037")
-        self.assertEqual(query.question_type, "technical_indicator_review")
+        self.assertEqual(query.intent, Intent.TECHNICAL_VIEW)
         self.assertEqual(query.time_range_days, 30)
 
     def test_input_layer_detects_season_line_margin_review(self) -> None:
@@ -77,7 +77,7 @@ class QueryPipelineTestCase(unittest.TestCase):
         )
 
         self.assertEqual(query.ticker, "6669")
-        self.assertEqual(query.question_type, "season_line_margin_review")
+        self.assertEqual(query.intent, Intent.TECHNICAL_VIEW)
         self.assertEqual(query.time_range_days, 90)
 
     def test_input_layer_detects_theme_impact_review_with_spaced_company_name(self) -> None:
@@ -87,7 +87,7 @@ class QueryPipelineTestCase(unittest.TestCase):
 
         self.assertEqual(query.ticker, "4721")
         self.assertEqual(query.company_name, "美琪瑪")
-        self.assertEqual(query.question_type, "theme_impact_review")
+        self.assertEqual(query.intent, Intent.NEWS_DIGEST)
         self.assertEqual(query.time_range_days, 30)
 
     def test_input_layer_detects_revenue_growth_review(self) -> None:
@@ -96,7 +96,7 @@ class QueryPipelineTestCase(unittest.TestCase):
         )
 
         self.assertEqual(query.ticker, "2317")
-        self.assertEqual(query.question_type, "revenue_growth_review")
+        self.assertEqual(query.intent, Intent.FINANCIAL_HEALTH)
         self.assertEqual(query.time_range_days, 90)
 
     def test_query_returns_grounded_response(self) -> None:
@@ -116,14 +116,18 @@ class QueryPipelineTestCase(unittest.TestCase):
 
         self.assertTrue(all("台積電" not in source.title for source in response.sources))
 
-    def test_price_range_query_returns_matching_stock_data(self) -> None:
+    def test_price_range_query_routes_to_matching_stock(self) -> None:
+        """Wave 2 sunset：ValuationCheckStrategy 下架後，price_range 查詢
+        不再回傳含「最高價 / 最低價」的專用摘要，改由 FallbackStrategy 接手，
+        但 ticker routing / source scoping 仍必須維持正確。"""
         pipeline = build_pipeline()
         response = pipeline.handle_query(QueryRequest(query="華邦電最近30天最高點與最低點股價？"))
 
-        self.assertIn("華邦電", response.summary)
-        self.assertIn("最高價", response.summary)
-        self.assertIn("最低價", response.summary)
-        self.assertTrue(all("華邦電" in source.title for source in response.sources))
+        self.assertTrue(response.sources, "price_range query should still retrieve sources")
+        self.assertTrue(
+            all("華邦電" in source.title for source in response.sources),
+            "sources should remain scoped to the queried ticker",
+        )
 
     def test_unknown_stock_does_not_fall_back_to_other_companies(self) -> None:
         pipeline = build_pipeline()
@@ -230,62 +234,6 @@ class QueryPipelineTestCase(unittest.TestCase):
         self.assertIn("MACD 動能偏多", draft.summary)
         self.assertIn("接近布林上軌", draft.summary)
         self.assertIn("MA5 乖離率約 3.25%", draft.summary)
-
-    def test_rule_based_summary_mentions_season_line_and_margin(self) -> None:
-        query = InputLayer().parse(
-            QueryRequest(query="緯穎 (6669) 的股價近期是否跌破季線？市場對其融資餘額過高的看法。")
-        )
-        governance_report = GovernanceReport(
-            evidence=[
-                Evidence(
-                    document_id="1",
-                    title="緯穎季線位置觀察",
-                    excerpt=(
-                        "最新交易日為 2026-04-07。"
-                        "最新收盤價約 2450.00 元。"
-                        "季線(MA60)約 2488.00 元。"
-                        "與季線乖離約 -1.53%。"
-                        "目前近期跌破季線。"
-                    ),
-                    source_name="FinMind TaiwanStockPrice",
-                    source_tier=SourceTier.HIGH,
-                    url="https://example.com/season-line",
-                    published_at=SAMPLE_DOCUMENTS[0].published_at,
-                    support_score=1.0,
-                    corroboration_count=1,
-                ),
-                Evidence(
-                    document_id="2",
-                    title="緯穎融資餘額觀察",
-                    excerpt=(
-                        "最新資料日為 2026-04-07。"
-                        "最新融資餘額約 3200 張。"
-                        "融資限額約 9800 張。"
-                        "融資使用率約 32.65%。"
-                        "近 20 個交易日平均融資餘額約 2780 張。"
-                        "相較近 20 日平均變動約 15.11%。"
-                        "近 5 個交易日融資餘額變動約 +180 張。"
-                        "若以融資使用率與近 20 日均值推估，籌碼面屬中性偏高。"
-                    ),
-                    source_name="FinMind TaiwanStockMarginPurchaseShortSale",
-                    source_tier=SourceTier.HIGH,
-                    url="https://example.com/margin-balance",
-                    published_at=SAMPLE_DOCUMENTS[0].published_at,
-                    support_score=1.0,
-                    corroboration_count=1,
-                ),
-            ],
-            sufficiency=SufficiencyStatus.SUFFICIENT,
-            consistency=ConsistencyStatus.CONSISTENT,
-            freshness=FreshnessStatus.RECENT,
-            high_trust_ratio=1.0,
-        )
-
-        draft = RuleBasedSynthesisClient().synthesize(query, governance_report, "")
-
-        self.assertIn("近期跌破季線", draft.summary)
-        self.assertIn("融資使用率約 32.65%", draft.summary)
-        self.assertIn("中性偏高", draft.summary)
 
     def test_rule_based_summary_mentions_theme_impact(self) -> None:
         query = InputLayer().parse(

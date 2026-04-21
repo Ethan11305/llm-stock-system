@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 import unittest
 
 from llm_stock_system.adapters.llm import RuleBasedSynthesisClient
-from llm_stock_system.core.enums import SourceTier
+from llm_stock_system.core.enums import Intent, SourceTier
 from llm_stock_system.core.models import Evidence, GovernanceReport, QueryRequest
 from llm_stock_system.layers.input_layer import InputLayer
 
@@ -17,7 +17,7 @@ class ListingRevenueQueryTestCase(unittest.TestCase):
 
         self.assertEqual(query.ticker, "2646")
         self.assertEqual(query.company_name, "星宇航空")
-        self.assertEqual(query.question_type, "listing_revenue_review")
+        self.assertEqual(query.intent, Intent.NEWS_DIGEST)
         self.assertEqual(query.time_range_days, 30)
 
     def test_input_layer_detects_ipo_variant_of_listing_template(self) -> None:
@@ -29,7 +29,7 @@ class ListingRevenueQueryTestCase(unittest.TestCase):
 
         self.assertEqual(query.ticker, "2646")
         self.assertEqual(query.company_name, "星宇航空")
-        self.assertEqual(query.question_type, "listing_revenue_review")
+        self.assertEqual(query.intent, Intent.NEWS_DIGEST)
 
     def test_rule_based_summary_mentions_revenue_signal_and_news_focus(self) -> None:
         query = InputLayer().parse(

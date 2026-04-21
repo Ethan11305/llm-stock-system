@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 import unittest
 
 from llm_stock_system.adapters.llm import RuleBasedSynthesisClient
-from llm_stock_system.core.enums import SourceTier
+from llm_stock_system.core.enums import Intent, SourceTier
 from llm_stock_system.core.models import Evidence, GovernanceReport, QueryRequest
 from llm_stock_system.layers.input_layer import InputLayer
 
@@ -22,7 +22,7 @@ class ShippingRateImpactQueryTestCase(unittest.TestCase):
         self.assertEqual(query.company_name, "長榮")
         self.assertEqual(query.comparison_ticker, "2609")
         self.assertEqual(query.comparison_company_name, "陽明")
-        self.assertEqual(query.question_type, "shipping_rate_impact_review")
+        self.assertEqual(query.intent, Intent.NEWS_DIGEST)
         self.assertEqual(query.time_range_days, 30)
 
     def test_rule_based_summary_reports_shipping_rate_and_target_price_view(self) -> None:

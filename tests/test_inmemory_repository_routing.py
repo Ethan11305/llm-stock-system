@@ -133,27 +133,5 @@ class InMemoryRepositoryRoutingTestCase(unittest.TestCase):
         self.assertEqual(outlook_score, neutral_score + 1)
         self.assertEqual(fundamental_score, neutral_score + 1)
 
-    def test_legacy_question_type_backfills_theme_tags_for_comparison_logic(self) -> None:
-        repository = InMemoryDocumentRepository(
-            [
-                make_document(ticker="3680", title="家登"),
-                make_document(ticker="6187", title="萬潤"),
-            ]
-        )
-        query = StructuredQuery(
-            user_query="題材股比較",
-            ticker="3680",
-            company_name="家登",
-            comparison_ticker="6187",
-            comparison_company_name="萬潤",
-            question_type="theme_impact_review",
-        )
-
-        documents = repository.search_documents(query)
-
-        self.assertEqual({item.ticker for item in documents}, {"3680", "6187"})
-        self.assertIn("題材", query.topic_tags)
-
-
 if __name__ == "__main__":
     unittest.main()

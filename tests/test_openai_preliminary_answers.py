@@ -3,7 +3,7 @@ import unittest
 import httpx
 
 from llm_stock_system.adapters.openai_responses import OpenAIResponsesSynthesisClient
-from llm_stock_system.core.enums import ConfidenceLight, ConsistencyStatus, FreshnessStatus, SufficiencyStatus, Topic
+from llm_stock_system.core.enums import ConfidenceLight, ConsistencyStatus, FreshnessStatus, Intent, SufficiencyStatus, Topic
 from llm_stock_system.core.models import DataStatus, GovernanceReport, QueryResponse, StructuredQuery
 from llm_stock_system.layers.presentation_layer import PresentationLayer
 from llm_stock_system.layers.validation_layer import ValidationLayer
@@ -51,7 +51,7 @@ class OpenAIPreliminaryAnswerTestCase(unittest.TestCase):
             user_query="我想把0050 當成退休存股，請幫我摘要它過去五年是否每年都有穩定獲利？",
             ticker="0050",
             topic=Topic.EARNINGS,
-            question_type="profitability_stability_review",
+            intent=Intent.FINANCIAL_HEALTH,
             time_range_label="5y",
             time_range_days=1825,
         )
@@ -75,7 +75,7 @@ class OpenAIPreliminaryAnswerTestCase(unittest.TestCase):
             user_query="我想把0050 當成退休存股，請幫我摘要它過去五年是否每年都有穩定獲利？",
             ticker="0050",
             topic=Topic.EARNINGS,
-            question_type="profitability_stability_review",
+            intent=Intent.FINANCIAL_HEALTH,
             time_range_label="5y",
             time_range_days=1825,
         )
@@ -111,7 +111,7 @@ class OpenAIPreliminaryAnswerTestCase(unittest.TestCase):
             comparison_ticker="6187",
             comparison_company_name="萬潤",
             topic=Topic.COMPOSITE,
-            question_type="theme_impact_review",
+            intent=Intent.NEWS_DIGEST,
             time_range_label="30d",
             time_range_days=30,
         )
@@ -134,7 +134,7 @@ class OpenAIPreliminaryAnswerTestCase(unittest.TestCase):
             user_query="9999 這家公司最近有什麼消息？",
             ticker="9999",
             topic=Topic.COMPOSITE,
-            question_type="market_summary",
+            intent=Intent.NEWS_DIGEST,
             time_range_label="7d",
             time_range_days=7,
         )
@@ -156,7 +156,7 @@ class OpenAIPreliminaryAnswerTestCase(unittest.TestCase):
                     user_query="9999 這家公司最近有什麼消息？",
                     ticker="9999",
                     topic=Topic.COMPOSITE,
-                    question_type="market_summary",
+                    intent=Intent.NEWS_DIGEST,
                     time_range_label="7d",
                     time_range_days=7,
                 ),

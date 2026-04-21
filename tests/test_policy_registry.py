@@ -1,22 +1,22 @@
 """test_policy_registry.py
 
-測試 P2：PolicyRegistry 骨架。
+測試 P2：PolicyRegistry 骨架（Wave 4 Stage 6a：tag-based routing）。
 
 驗證項目：
-1. 全部 27 個 question_type 都已在 Registry 中
-2. resolve() 精確匹配正確回傳
-3. resolve() fallback 到同 intent 的其他 policy
-4. resolve() 最終 fallback 回傳 news_generic（不 crash）
-5. 所有 policy 的 facet 不為空且 intent 一致
-6. cove_eligible 只有財報/估值類才是 True
-7. get_policy_registry() 回傳單例（多次呼叫同一個物件）
+1. 每個 Intent 都有最少一支 policy（27 支原始 policy 全數保留，改以 intent+tag 主鍵）
+2. resolve_by_tags() 以 intent + controlled_tags 精確匹配正確回傳
+3. resolve_by_tags() fallback：無 tag 時回傳 intent 的通用 policy，match_type="generic"
+4. resolve_by_tags() 最終 fallback（未知 intent → news_generic match_type="fallback"）
+5. 所有 policy 的 facet 不為空
+6. cove_eligible 只有財報/估值/財務健康類才是 True（NEWS_DIGEST 全為 False）
+7. register() 以 (intent, frozenset(topic_tags)) 為主鍵並可覆蓋
+8. get_policy_registry() 回傳單例
 """
 from __future__ import annotations
 
 import unittest
 
 from llm_stock_system.core.enums import DataFacet, Intent
-from llm_stock_system.core.models import QUESTION_TYPE_TO_INTENT
 from llm_stock_system.core.query_policy import (
     PolicyRegistry,
     QueryPolicy,
@@ -31,15 +31,26 @@ class PolicyRegistryBasicTest(unittest.TestCase):
 
     # ── 完整性檢查 ──────────────────────────────────────────────────────────
 
-    def test_all_27_question_types_registered(self):
-        """全部 27 個 question_type 都必須在 Registry 中有對應 policy。"""
+    def test_all_expected_policies_registered(self):
+        """7 大 Intent 都應該至少有一支 policy 登記，而且總數維持 27 支。"""
         all_policies = self.registry.get_all()
-        registered_types = {p.question_type for p in all_policies}
-
-        missing = set(QUESTION_TYPE_TO_INTENT.keys()) - registered_types
         self.assertEqual(
-            missing, set(),
-            f"以下 question_type 缺少對應 policy：{missing}",
+            len(all_policies), 27,
+            f"預期 27 支 policy，實際 {len(all_policies)}",
+        )
+        intents_with_policy = {p.intent for p in all_policies}
+        expected_intents = {
+            Intent.NEWS_DIGEST,
+            Intent.EARNINGS_REVIEW,
+            Intent.VALUATION_CHECK,
+            Intent.DIVIDEND_ANALYSIS,
+            Intent.FINANCIAL_HEALTH,
+            Intent.TECHNICAL_VIEW,
+            Intent.INVESTMENT_ASSESSMENT,
+        }
+        self.assertEqual(
+            intents_with_policy, expected_intents,
+            f"缺少 intent：{expected_intents - intents_with_policy}",
         )
 
     def test_all_policies_have_non_empty_facets(self):
@@ -48,78 +59,73 @@ class PolicyRegistryBasicTest(unittest.TestCase):
             has_facets = bool(policy.required_facets or policy.preferred_facets)
             self.assertTrue(
                 has_facets,
-                f"{policy.question_type} 的 required + preferred facets 都是空的",
+                f"{policy.retrieval_profile_key} 的 required + preferred facets 都是空的",
             )
-
-    def test_all_policies_intent_matches_question_type_to_intent(self):
-        """policy.intent 必須與 QUESTION_TYPE_TO_INTENT 中的對應值一致。"""
-        for policy in self.registry.get_all():
-            expected_intent = QUESTION_TYPE_TO_INTENT.get(policy.question_type)
-            if expected_intent is not None:
-                self.assertEqual(
-                    policy.intent,
-                    expected_intent,
-                    f"{policy.question_type} 的 intent 不符（期待 {expected_intent}，實際 {policy.intent}）",
-                )
 
     def test_all_policies_have_retrieval_profile_key(self):
         """每個 policy 都必須有非空的 retrieval_profile_key。"""
         for policy in self.registry.get_all():
             self.assertTrue(
                 policy.retrieval_profile_key,
-                f"{policy.question_type} 缺少 retrieval_profile_key",
+                f"intent={policy.intent} 的 policy 缺少 retrieval_profile_key",
             )
 
-    # ── resolve() 精確匹配 ──────────────────────────────────────────────────
+    # ── resolve_by_tags() 精確匹配 ──────────────────────────────────────────
 
-    def test_resolve_exact_match(self):
-        """resolve() 精確匹配已知 (intent, question_type) 組合。
-
-        注意：question_type 是 "shipping_rate_impact_review"（輸入層的分類名稱），
-              不是 retrieval_profile_key "news_shipping"（gateway 的 profile 名稱）。
-        """
-        policy = self.registry.resolve(Intent.NEWS_DIGEST, "shipping_rate_impact_review")
-        self.assertEqual(policy.question_type, "shipping_rate_impact_review")
+    def test_resolve_shipping_exact_match(self):
+        """NEWS_DIGEST + {航運, SCFI} 應命中 news_shipping。"""
+        policy = self.registry.resolve_by_tags(
+            Intent.NEWS_DIGEST, ("航運", "SCFI"),
+        )
         self.assertEqual(policy.intent, Intent.NEWS_DIGEST)
         self.assertEqual(policy.retrieval_profile_key, "news_shipping")
+        self.assertEqual(policy.match_type, "exact")
 
-    def test_resolve_earnings_summary(self):
-        """earnings_summary 應對應 earnings_fundamental profile 且 cove_eligible=True。"""
-        policy = self.registry.resolve(Intent.EARNINGS_REVIEW, "earnings_summary")
-        self.assertEqual(policy.question_type, "earnings_summary")
+    def test_resolve_earnings_fundamental(self):
+        """EARNINGS_REVIEW + {財報} 應命中 earnings_fundamental 且 cove_eligible。"""
+        policy = self.registry.resolve_by_tags(
+            Intent.EARNINGS_REVIEW, ("財報",),
+        )
         self.assertEqual(policy.retrieval_profile_key, "earnings_fundamental")
         self.assertTrue(policy.cove_eligible)
+        self.assertEqual(policy.match_type, "exact")
 
     def test_resolve_investment_support_min_evidence(self):
         """investment_support 需要至少 3 篇文件。"""
-        policy = self.registry.resolve(Intent.INVESTMENT_ASSESSMENT, "investment_support")
+        policy = self.registry.resolve_by_tags(
+            Intent.INVESTMENT_ASSESSMENT, ("投資評估", "基本面", "本益比"),
+        )
         self.assertGreaterEqual(policy.min_evidence_count, 3)
 
     def test_resolve_dividend_fcf_requires_cashflow(self):
-        """fcf_dividend_sustainability_review 必須包含 CASH_FLOW facet。"""
-        policy = self.registry.resolve(Intent.DIVIDEND_ANALYSIS, "fcf_dividend_sustainability_review")
+        """dividend_fcf 必須包含 CASH_FLOW facet。"""
+        policy = self.registry.resolve_by_tags(
+            Intent.DIVIDEND_ANALYSIS, ("股利", "現金流"),
+        )
         self.assertIn(DataFacet.CASH_FLOW, policy.required_facets)
 
-    # ── resolve() fallback 行為 ──────────────────────────────────────────────
+    # ── resolve_by_tags() fallback 行為 ──────────────────────────────────────
 
-    def test_resolve_unknown_question_type_falls_back_to_same_intent(self):
-        """未知 question_type 應 fallback 到同 intent 的第一個 policy（不 crash）。"""
-        policy = self.registry.resolve(Intent.EARNINGS_REVIEW, "totally_unknown_type")
-        # 只要 intent 一致，fallback 就是正確行為
+    def test_resolve_empty_tags_returns_generic(self):
+        """空 controlled_tags 應 fallback 到 intent 的通用 policy，match_type='generic'。"""
+        policy = self.registry.resolve_by_tags(
+            Intent.EARNINGS_REVIEW, (),
+        )
         self.assertEqual(policy.intent, Intent.EARNINGS_REVIEW)
+        self.assertEqual(policy.match_type, "generic")
 
-    def test_resolve_unknown_intent_and_type_returns_default(self):
-        """完全未知的 intent 和 question_type 應回傳 default policy（不 crash）。"""
-        # 用 None 無法通過 type check，直接用 object 測試 fallback 路徑
-        policy = self.registry.resolve(Intent.NEWS_DIGEST, "__nonexistent__xyz__")
-        # 預設是 news_generic，不應 raise
-        self.assertIsNotNone(policy)
-        self.assertIsInstance(policy, QueryPolicy)
+    def test_resolve_unknown_tags_falls_back_to_generic(self):
+        """沒有任何已知 tag 命中時，應 fallback 到同 intent 的通用 policy。"""
+        policy = self.registry.resolve_by_tags(
+            Intent.EARNINGS_REVIEW, ("這個標籤完全沒人認識",),
+        )
+        self.assertEqual(policy.intent, Intent.EARNINGS_REVIEW)
+        self.assertEqual(policy.match_type, "generic")
 
     # ── cove_eligible 邏輯 ──────────────────────────────────────────────────
 
-    def test_cove_eligible_only_for_financial_types(self):
-        """cove_eligible=True 只應存在於財報/估值/財務健康類型，而非純新聞類型。"""
+    def test_cove_eligible_false_for_news_policies(self):
+        """NEWS_DIGEST 下所有 policy 都不應 cove_eligible。"""
         news_policies = [
             p for p in self.registry.get_all()
             if p.intent == Intent.NEWS_DIGEST
@@ -127,38 +133,45 @@ class PolicyRegistryBasicTest(unittest.TestCase):
         for p in news_policies:
             self.assertFalse(
                 p.cove_eligible,
-                f"NEWS_DIGEST 類型 {p.question_type} 不應是 cove_eligible",
+                f"NEWS_DIGEST 的 {p.retrieval_profile_key} 不應是 cove_eligible",
             )
 
-    def test_cove_eligible_true_for_earnings_types(self):
-        """主要財報類型都應是 cove_eligible=True。"""
-        cove_expected = ["earnings_summary", "eps_dividend_review", "profitability_stability_review"]
-        for qt in cove_expected:
-            intent = QUESTION_TYPE_TO_INTENT[qt]
-            policy = self.registry.resolve(intent, qt)
+    def test_cove_eligible_true_for_key_financial_policies(self):
+        """財報主線 policies 應 cove_eligible=True。"""
+        cases = [
+            (Intent.EARNINGS_REVIEW,   ("財報",),            "earnings_fundamental"),
+            (Intent.EARNINGS_REVIEW,   ("EPS", "股利"),       "earnings_eps_dividend"),
+            (Intent.FINANCIAL_HEALTH,  ("獲利", "穩定性"),     "health_profitability"),
+        ]
+        for intent, tags, expected_profile in cases:
+            policy = self.registry.resolve_by_tags(intent, tags)
             self.assertTrue(
                 policy.cove_eligible,
-                f"{qt} 應是 cove_eligible=True",
+                f"{expected_profile} 應是 cove_eligible=True",
             )
+            self.assertEqual(policy.retrieval_profile_key, expected_profile)
 
     # ── 手動 register ────────────────────────────────────────────────────────
 
     def test_manual_register_overrides_existing(self):
-        """手動 register() 應覆蓋同一 (intent, question_type) 的舊 policy。"""
-        original = self.registry.resolve(Intent.NEWS_DIGEST, "news_shipping")
+        """以同 (intent, topic_tags) 呼叫 register() 應覆蓋舊 policy。"""
+        original = self.registry.resolve_by_tags(
+            Intent.NEWS_DIGEST, ("航運", "SCFI"),
+        )
+        self.assertEqual(original.retrieval_profile_key, "news_shipping")
 
-        # 建立一個 confidence_cap=0.9 的測試 policy
         custom = QueryPolicy(
             intent=Intent.NEWS_DIGEST,
-            question_type="news_shipping",
             required_facets=frozenset({DataFacet.NEWS}),
             preferred_facets=frozenset(),
             retrieval_profile_key="custom_test",
-            topic_tags=("test",),
+            topic_tags=("航運", "SCFI"),
             confidence_cap=0.9,
         )
         self.registry.register(custom)
-        resolved = self.registry.resolve(Intent.NEWS_DIGEST, "news_shipping")
+        resolved = self.registry.resolve_by_tags(
+            Intent.NEWS_DIGEST, ("航運", "SCFI"),
+        )
         self.assertEqual(resolved.retrieval_profile_key, "custom_test")
         self.assertEqual(resolved.confidence_cap, 0.9)
 
@@ -171,12 +184,10 @@ class PolicyRegistrySingletonTest(unittest.TestCase):
         registry_b = get_policy_registry()
         self.assertIs(registry_a, registry_b)
 
-    def test_singleton_has_all_policies(self):
-        """單例中應包含全部 question_type 的 policy。"""
+    def test_singleton_has_27_policies(self):
+        """單例中應包含 27 支 policy。"""
         registry = get_policy_registry()
-        all_types = {p.question_type for p in registry.get_all()}
-        for qt in QUESTION_TYPE_TO_INTENT:
-            self.assertIn(qt, all_types, f"singleton 缺少 {qt}")
+        self.assertEqual(len(registry.get_all()), 27)
 
 
 if __name__ == "__main__":

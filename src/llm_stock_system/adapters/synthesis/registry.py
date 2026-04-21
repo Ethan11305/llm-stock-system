@@ -5,19 +5,17 @@ from .dividend_analysis import DividendAnalysisStrategy
 from .earnings_review import EarningsReviewStrategy
 from .fallback import FallbackStrategy
 from .financial_health import FinancialHealthStrategy
-from .investment_assessment import InvestmentAssessmentStrategy
 from .news_digest import NewsDigestStrategy
 from .technical_view import TechnicalViewStrategy
-from .valuation_check import ValuationCheckStrategy
 
+# Wave 2 sunset：移除 VALUATION_CHECK / INVESTMENT_ASSESSMENT 專屬 strategy
+# 兩者交由 FallbackStrategy 處理（registry.get 找不到時 fall through）。
 _REGISTRY: dict[Intent, IntentStrategy] = {
-    Intent.NEWS_DIGEST:           NewsDigestStrategy(),
-    Intent.EARNINGS_REVIEW:       EarningsReviewStrategy(),
-    Intent.VALUATION_CHECK:       ValuationCheckStrategy(),
-    Intent.DIVIDEND_ANALYSIS:     DividendAnalysisStrategy(),
-    Intent.FINANCIAL_HEALTH:      FinancialHealthStrategy(),
-    Intent.TECHNICAL_VIEW:        TechnicalViewStrategy(),
-    Intent.INVESTMENT_ASSESSMENT: InvestmentAssessmentStrategy(),
+    Intent.NEWS_DIGEST:       NewsDigestStrategy(),
+    Intent.EARNINGS_REVIEW:   EarningsReviewStrategy(),
+    Intent.DIVIDEND_ANALYSIS: DividendAnalysisStrategy(),
+    Intent.FINANCIAL_HEALTH:  FinancialHealthStrategy(),
+    Intent.TECHNICAL_VIEW:    TechnicalViewStrategy(),
 }
 
 _FALLBACK: IntentStrategy = FallbackStrategy()

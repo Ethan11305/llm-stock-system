@@ -9,6 +9,7 @@ from llm_stock_system.core.enums import (
     FreshnessStatus,
     Intent,
     SufficiencyStatus,
+    TopicTag,
 )
 from llm_stock_system.core.models import (
     AnswerDraft,
@@ -46,7 +47,7 @@ class StubInputLayer:
         return StructuredQuery(
             user_query=request.query,
             ticker="2330",
-            question_type="market_summary",
+            intent=Intent.NEWS_DIGEST,
         )
 
 
@@ -152,7 +153,7 @@ class QueryDataHydratorPhase2TestCase(unittest.TestCase):
         query = StructuredQuery(
             user_query="theme review",
             ticker="2330",
-            question_type="theme_impact_review",
+            intent=Intent.NEWS_DIGEST,
             time_range_label="14d",
             time_range_days=14,
         )
@@ -172,7 +173,7 @@ class QueryDataHydratorPhase2TestCase(unittest.TestCase):
         query = StructuredQuery(
             user_query="valuation",
             ticker="2330",
-            question_type="price_range",
+            intent=Intent.VALUATION_CHECK,
             time_range_label="30d",
             time_range_days=30,
         )
@@ -222,7 +223,8 @@ class QueryDataHydratorPhase2TestCase(unittest.TestCase):
         query = StructuredQuery(
             user_query="technical view",
             ticker="2330",
-            question_type="technical_indicator_review",
+            intent=Intent.TECHNICAL_VIEW,
+            controlled_tags=[TopicTag.TECHNICAL],
             time_range_label="30d",
             time_range_days=30,
         )
@@ -238,7 +240,7 @@ class QueryDataHydratorPhase2TestCase(unittest.TestCase):
         query = StructuredQuery(
             user_query="earnings",
             ticker="2330",
-            question_type="earnings_summary",
+            intent=Intent.EARNINGS_REVIEW,
             time_range_label="1y",
             time_range_days=365,
         )
@@ -254,7 +256,7 @@ class QueryDataHydratorPhase2TestCase(unittest.TestCase):
         query = StructuredQuery(
             user_query="dividend",
             ticker="2412",
-            question_type="dividend_yield_review",
+            intent=Intent.DIVIDEND_ANALYSIS,
             time_range_label="10y",
             time_range_days=3650,
         )
@@ -270,7 +272,7 @@ class QueryDataHydratorPhase2TestCase(unittest.TestCase):
         query = StructuredQuery(
             user_query="debt safety",
             ticker="2412",
-            question_type="debt_dividend_safety_review",
+            intent=Intent.DIVIDEND_ANALYSIS,
             time_range_label="3y",
             time_range_days=1095,
         )
@@ -328,7 +330,8 @@ class QueryDataHydratorPhase2TestCase(unittest.TestCase):
         query = StructuredQuery(
             user_query="profitability stability",
             ticker="2454",
-            question_type="profitability_stability_review",
+            intent=Intent.FINANCIAL_HEALTH,
+            free_keywords=["獲利", "穩定性"],
             time_range_label="30d",
             time_range_days=30,
         )
@@ -344,7 +347,7 @@ class QueryDataHydratorPhase2TestCase(unittest.TestCase):
         query = StructuredQuery(
             user_query="valuation",
             ticker="2330",
-            question_type="fundamental_pe_review",
+            intent=Intent.VALUATION_CHECK,
             time_range_label="1y",
             time_range_days=365,
         )
@@ -359,7 +362,7 @@ class QueryDataHydratorPhase2TestCase(unittest.TestCase):
         query = StructuredQuery(
             user_query="news digest",
             ticker="2603",
-            question_type="theme_impact_review",
+            intent=Intent.NEWS_DIGEST,
         )
 
         result = hydrator.hydrate(query)
@@ -375,7 +378,8 @@ class QueryDataHydratorPhase2TestCase(unittest.TestCase):
         query = StructuredQuery(
             user_query="season line",
             ticker="6669",
-            question_type="season_line_margin_review",
+            intent=Intent.TECHNICAL_VIEW,
+            controlled_tags=[TopicTag.MARGIN_FLOW],
             time_range_label="90d",
             time_range_days=90,
         )
@@ -394,7 +398,7 @@ class QueryDataHydratorPhase2TestCase(unittest.TestCase):
             user_query="compare valuation",
             ticker="2330",
             comparison_ticker="2454",
-            question_type="fundamental_pe_review",
+            intent=Intent.VALUATION_CHECK,
             time_range_label="1y",
             time_range_days=365,
         )
@@ -413,7 +417,7 @@ class QueryDataHydratorPhase2TestCase(unittest.TestCase):
         query = StructuredQuery(
             user_query="fcf dividend",
             ticker="2412",
-            question_type="fcf_dividend_sustainability_review",
+            intent=Intent.DIVIDEND_ANALYSIS,
             time_range_label="3y",
             time_range_days=1095,
         )
@@ -440,7 +444,7 @@ class QueryDataHydratorPhase2TestCase(unittest.TestCase):
         query = StructuredQuery(
             user_query="investment support",
             ticker="2330",
-            question_type="investment_support",
+            intent=Intent.INVESTMENT_ASSESSMENT,
             time_range_label="1y",
             time_range_days=365,
         )

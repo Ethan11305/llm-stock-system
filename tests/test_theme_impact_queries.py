@@ -3,6 +3,7 @@ import unittest
 
 from llm_stock_system.adapters.llm import RuleBasedSynthesisClient
 from llm_stock_system.adapters.repositories import InMemoryDocumentRepository, InMemoryQueryLogStore
+from llm_stock_system.core.enums import Intent
 from llm_stock_system.core.models import QueryRequest
 from llm_stock_system.layers.data_governance_layer import DataGovernanceLayer
 from llm_stock_system.layers.generation_layer import GenerationLayer
@@ -45,7 +46,7 @@ class ThemeImpactQueryTestCase(unittest.TestCase):
         self.assertEqual(query.company_name, "家登")
         self.assertEqual(query.comparison_ticker, "6187")
         self.assertEqual(query.comparison_company_name, "萬潤")
-        self.assertEqual(query.question_type, "theme_impact_review")
+        self.assertEqual(query.intent, Intent.NEWS_DIGEST)
         self.assertEqual(query.time_range_days, 30)
 
     def test_pipeline_returns_grounded_theme_impact_summary(self) -> None:

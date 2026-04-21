@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 import unittest
 
-from llm_stock_system.core.enums import ConfidenceLight, ConsistencyStatus, FreshnessStatus, SourceTier, SufficiencyStatus
+from llm_stock_system.core.enums import ConfidenceLight, ConsistencyStatus, FreshnessStatus, Intent, SourceTier, SufficiencyStatus
 from llm_stock_system.core.models import AnswerDraft, Evidence, GovernanceReport, SourceCitation, StructuredQuery
 from llm_stock_system.layers.validation_layer import ValidationLayer
 
@@ -9,12 +9,43 @@ from llm_stock_system.layers.validation_layer import ValidationLayer
 UTC_NOW = datetime(2026, 4, 14, tzinfo=timezone.utc)
 
 
-def build_query(question_type: str, **overrides) -> StructuredQuery:
+_SIGNATURE_TO_INTENT: dict[str, Intent] = {
+    "market_summary": Intent.NEWS_DIGEST,
+    "theme_impact_review": Intent.NEWS_DIGEST,
+    "shipping_rate_impact_review": Intent.NEWS_DIGEST,
+    "electricity_cost_impact_review": Intent.NEWS_DIGEST,
+    "macro_yield_sentiment_review": Intent.NEWS_DIGEST,
+    "guidance_reaction_review": Intent.NEWS_DIGEST,
+    "listing_revenue_review": Intent.NEWS_DIGEST,
+    "earnings_summary": Intent.EARNINGS_REVIEW,
+    "eps_dividend_review": Intent.EARNINGS_REVIEW,
+    "monthly_revenue_yoy_review": Intent.EARNINGS_REVIEW,
+    "margin_turnaround_review": Intent.EARNINGS_REVIEW,
+    "pe_valuation_review": Intent.VALUATION_CHECK,
+    "fundamental_pe_review": Intent.VALUATION_CHECK,
+    "price_range": Intent.VALUATION_CHECK,
+    "price_outlook": Intent.VALUATION_CHECK,
+    "dividend_yield_review": Intent.DIVIDEND_ANALYSIS,
+    "ex_dividend_performance": Intent.DIVIDEND_ANALYSIS,
+    "fcf_dividend_sustainability_review": Intent.DIVIDEND_ANALYSIS,
+    "debt_dividend_safety_review": Intent.DIVIDEND_ANALYSIS,
+    "profitability_stability_review": Intent.FINANCIAL_HEALTH,
+    "gross_margin_comparison_review": Intent.FINANCIAL_HEALTH,
+    "revenue_growth_review": Intent.FINANCIAL_HEALTH,
+    "technical_indicator_review": Intent.TECHNICAL_VIEW,
+    "season_line_margin_review": Intent.TECHNICAL_VIEW,
+    "investment_support": Intent.INVESTMENT_ASSESSMENT,
+    "risk_review": Intent.INVESTMENT_ASSESSMENT,
+    "announcement_summary": Intent.INVESTMENT_ASSESSMENT,
+}
+
+
+def build_query(rule_signature: str, **overrides) -> StructuredQuery:
     defaults = {
-        "user_query": f"validate {question_type}",
+        "user_query": f"validate {rule_signature}",
         "ticker": "2330",
         "company_name": "TSMC",
-        "question_type": question_type,
+        "intent": _SIGNATURE_TO_INTENT[rule_signature],
         "time_range_label": "1y",
         "time_range_days": 365,
     }
@@ -175,57 +206,6 @@ class ValidationLayerPhase3TestCase(unittest.TestCase):
 
         self.assertEqual(result.confidence_score, 0.7)
         self.assertIn("Preferred facets not synced (3)", result.warnings[0])
-
-    def test_group_b_dual_signal_caps_for_season_line_margin_review(self) -> None:
-        query = build_query("season_line_margin_review")
-
-        partial_evidence = [
-            build_evidence("FinMind TaiwanStockPrice", "Price snapshot 1", "price trend remains weak"),
-            build_evidence("FinMind TaiwanStockPrice", "Price snapshot 2", "price remains below season line"),
-            build_evidence("FinMind TaiwanStockPrice", "Price snapshot 3", "price volume remains active"),
-            build_evidence("FinMind TaiwanStockPrice", "Price snapshot 4", "price volatility remains elevated"),
-        ]
-        partial_result = self.validation.validate(
-            query,
-            build_governance_report(partial_evidence),
-            build_answer_draft("Partial season-line review.", partial_evidence),
-            facet_miss_list=[],
-            preferred_miss_list=[],
-        )
-        self.assertEqual(partial_result.confidence_score, 0.5)
-        self.assertIn("missing one of price or margin evidence", partial_result.warnings[-1])
-
-        missing_both_evidence = [
-            build_evidence("Generic source", "Context 1", "market commentary"),
-            build_evidence("Generic source", "Context 2", "market commentary"),
-            build_evidence("Generic source", "Context 3", "market commentary"),
-            build_evidence("Generic source", "Context 4", "market commentary"),
-        ]
-        missing_both_result = self.validation.validate(
-            query,
-            build_governance_report(missing_both_evidence),
-            build_answer_draft("Ungrounded season-line review.", missing_both_evidence),
-            facet_miss_list=[],
-            preferred_miss_list=[],
-        )
-        self.assertEqual(missing_both_result.confidence_score, 0.25)
-        self.assertIn("missing both price and margin evidence", missing_both_result.warnings[-1])
-
-        complete_evidence = [
-            build_evidence("FinMind TaiwanStockPrice", "Price snapshot 1", "price trend remains weak"),
-            build_evidence("FinMind TaiwanStockPrice", "Price snapshot 2", "price remains below season line"),
-            build_evidence("FinMind TaiwanStockMarginPurchaseShortSale", "Margin snapshot 1", "margin balance remains elevated"),
-            build_evidence("FinMind TaiwanStockMarginPurchaseShortSale", "Margin snapshot 2", "margin balance changed"),
-        ]
-        complete_result = self.validation.validate(
-            query,
-            build_governance_report(complete_evidence),
-            build_answer_draft("Grounded season-line review.", complete_evidence),
-            facet_miss_list=[],
-            preferred_miss_list=[],
-        )
-        self.assertEqual(complete_result.confidence_score, 1.0)
-        self.assertFalse(any("Season line and margin review:" in warning for warning in complete_result.warnings))
 
     def test_validate_accepts_missing_preferred_miss_list(self) -> None:
         query = build_query("technical_indicator_review")

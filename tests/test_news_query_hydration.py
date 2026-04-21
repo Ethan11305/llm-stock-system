@@ -1,5 +1,6 @@
 import unittest
 
+from llm_stock_system.core.enums import Intent
 from llm_stock_system.core.models import QueryRequest
 from llm_stock_system.layers.input_layer import InputLayer
 from llm_stock_system.services.query_data_hydrator import QueryDataHydrator
@@ -34,7 +35,7 @@ class NewsQueryHydrationTestCase(unittest.TestCase):
         self.assertIn("sync_query_news", methods)
 
         synced_query = next(payload for method, payload in hydrator._gateway.calls if method == "sync_query_news")
-        self.assertEqual(synced_query.question_type, "theme_impact_review")
+        self.assertEqual(synced_query.intent, Intent.NEWS_DIGEST)
         self.assertEqual(synced_query.ticker, "3680")
         self.assertEqual(synced_query.comparison_ticker, "6187")
 

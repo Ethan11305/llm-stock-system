@@ -6,19 +6,20 @@ import httpx
 
 from llm_stock_system.core.enums import Intent, StanceBias, TopicTag
 from llm_stock_system.core.interfaces import QueryClassifier
-from llm_stock_system.core.models import QUESTION_TYPE_TO_INTENT
 
 
 _TIME_RANGE_LABELS = ["1d", "7d", "30d", "latest_quarter", "1y", "3y", "5y"]
 
 
 def _build_schema() -> dict:
-    """Derive the classification schema from existing source-of-truth dicts.
+    """Derive the classification schema from enum source-of-truth.
 
-    Keeps the enum lists in sync with QUESTION_TYPE_TO_INTENT / TopicTag / Intent
-    automatically — no hand-maintained duplicate.
+    Wave 4 Stage 5: the LLM no longer emits ``question_type``. Routing is driven
+    entirely by ``intent`` + ``topic_tags``; the InputLayer's rule engine
+    internally generates the (transitional) question_type if Stage 6 still
+    needs it. Keeps enum lists in sync with :class:`Intent` / :class:`TopicTag`
+    automatically.
     """
-    question_types = sorted(QUESTION_TYPE_TO_INTENT.keys())
     intents = [i.value for i in Intent]
     topic_tag_values = [t.value for t in TopicTag]
     stance_values = [s.value for s in StanceBias]
@@ -28,30 +29,18 @@ def _build_schema() -> dict:
         "additionalProperties": False,
         "required": [
             "intent",
-            "question_type",
             "topic_tags",
             "time_range_label",
             "stance_bias",
-            "is_forecast_query",
-            "wants_direction",
-            "wants_scenario_range",
-            "forecast_horizon_label",
-            "forecast_horizon_days",
         ],
         "properties": {
             "intent": {"type": "string", "enum": intents},
-            "question_type": {"type": "string", "enum": question_types},
             "topic_tags": {
                 "type": "array",
                 "items": {"type": "string", "enum": topic_tag_values},
             },
             "time_range_label": {"type": "string", "enum": _TIME_RANGE_LABELS},
             "stance_bias": {"type": "string", "enum": stance_values},
-            "is_forecast_query": {"type": "boolean"},
-            "wants_direction": {"type": "boolean"},
-            "wants_scenario_range": {"type": "boolean"},
-            "forecast_horizon_label": {"type": ["string", "null"]},
-            "forecast_horizon_days": {"type": ["integer", "null"]},
         },
     }
 
@@ -59,11 +48,8 @@ def _build_schema() -> dict:
 _SYSTEM_PROMPT = (
     "你是台股查詢分類器。根據使用者的自由文字問題，判定其語意欄位。\n"
     "規則：\n"
-    "- intent 與 question_type 必須對應（例如 price_outlook → valuation_check）。\n"
+    "- intent 必須是提供的 enum 之一。\n"
     "- topic_tags 只能使用提供的 enum 值（繁體中文），不要發明新標籤。\n"
-    "- 若問題提到「未來/下週/下半年」等前瞻性時間窗，且帶有方向或區間需求，"
-    "is_forecast_query 應為 true，並設定對應的 forecast_horizon_label/days。\n"
-    "- 若僅詢問歷史或當前狀態，is_forecast_query 為 false。\n"
     "- stance_bias：使用者語氣看多=bullish、看空=bearish、中性=neutral。\n"
     "- 回答一律使用繁體中文標籤。"
 )

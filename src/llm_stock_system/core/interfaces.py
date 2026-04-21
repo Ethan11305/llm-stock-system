@@ -75,15 +75,12 @@ class QueryClassifier(Protocol):
 
     回傳 dict 應包含（每個欄位皆可為 None／缺省，由 InputLayer 逐欄驗證）：
       - intent:                Intent 字串，例如 "valuation_check"
-      - question_type:         QUESTION_TYPE_TO_INTENT 的合法 key
       - topic_tags:             list[str]，每個必須是 TopicTag enum 的中文值
       - time_range_label:       "1d"|"7d"|"30d"|"latest_quarter"|"1y"|"3y"|"5y"
       - stance_bias:            "bullish"|"bearish"|"neutral"
-      - is_forecast_query:      bool
-      - wants_direction:        bool
-      - wants_scenario_range:   bool
-      - forecast_horizon_label: str | None
-      - forecast_horizon_days:  int | None
+
+    Wave 4 Stage 5：分類器不再輸出 question_type；若需要 legacy 標籤，
+    由 InputLayer 內部依 intent + controlled_tags 推導。
     """
 
     def classify(self, query_text: str) -> dict | None:

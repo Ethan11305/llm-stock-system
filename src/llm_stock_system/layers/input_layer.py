@@ -2,16 +2,87 @@ from __future__ import annotations
 
 import re
 
-from llm_stock_system.core.enums import StanceBias, Topic, TopicTag
+from llm_stock_system.core.enums import Intent, StanceBias, Topic, TopicTag
 from llm_stock_system.core.interfaces import QueryClassifier, StockResolver
-from llm_stock_system.core.models import (
-    QUESTION_TYPE_TO_INTENT,
-    QueryRequest,
-    StructuredQuery,
-    infer_intent_from_question_type,
-)
+from llm_stock_system.core.models import QueryRequest, StructuredQuery
 
-_VALID_QUESTION_TYPES: frozenset[str] = frozenset(QUESTION_TYPE_TO_INTENT.keys())
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Internal rule-signature → (intent, fallback tags) tables
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Wave 4 Stage 6b：``_detect_question_type`` 仍作為內部的 rule-based 分類器，
+# 產生 27 種細粒度 signature 字串。這些字串**不會**被放進 StructuredQuery
+# 或 PolicyRegistry；本模組內用下列 table 將 signature 翻譯成 (Intent,
+# fallback TopicTag/free-keyword tuple)，再將結果寫回 StructuredQuery。
+#
+# fallback tags 僅在查詢文字沒有任何 TopicTag 關鍵字命中時才使用，用來在
+# topic_tags 欄位留下人類可讀的路由訊號（會被塞進 free_keywords）。
+_RULE_SIGNATURE_TO_INTENT: dict[str, Intent] = {
+    "market_summary":                     Intent.NEWS_DIGEST,
+    "theme_impact_review":                Intent.NEWS_DIGEST,
+    "shipping_rate_impact_review":        Intent.NEWS_DIGEST,
+    "electricity_cost_impact_review":     Intent.NEWS_DIGEST,
+    "macro_yield_sentiment_review":       Intent.NEWS_DIGEST,
+    "guidance_reaction_review":           Intent.NEWS_DIGEST,
+    "listing_revenue_review":             Intent.NEWS_DIGEST,
+    "earnings_summary":                   Intent.EARNINGS_REVIEW,
+    "eps_dividend_review":                Intent.EARNINGS_REVIEW,
+    "monthly_revenue_yoy_review":         Intent.EARNINGS_REVIEW,
+    "margin_turnaround_review":           Intent.EARNINGS_REVIEW,
+    "pe_valuation_review":                Intent.VALUATION_CHECK,
+    "fundamental_pe_review":              Intent.VALUATION_CHECK,
+    "price_range":                        Intent.VALUATION_CHECK,
+    "price_outlook":                      Intent.VALUATION_CHECK,
+    "dividend_yield_review":              Intent.DIVIDEND_ANALYSIS,
+    "ex_dividend_performance":            Intent.DIVIDEND_ANALYSIS,
+    "fcf_dividend_sustainability_review": Intent.DIVIDEND_ANALYSIS,
+    "debt_dividend_safety_review":        Intent.DIVIDEND_ANALYSIS,
+    "profitability_stability_review":     Intent.FINANCIAL_HEALTH,
+    "gross_margin_comparison_review":     Intent.FINANCIAL_HEALTH,
+    "revenue_growth_review":              Intent.FINANCIAL_HEALTH,
+    "technical_indicator_review":         Intent.TECHNICAL_VIEW,
+    "season_line_margin_review":          Intent.TECHNICAL_VIEW,
+    "investment_support":                 Intent.INVESTMENT_ASSESSMENT,
+    "risk_review":                        Intent.INVESTMENT_ASSESSMENT,
+    "announcement_summary":               Intent.INVESTMENT_ASSESSMENT,
+}
+
+_RULE_SIGNATURE_FALLBACK_TAGS: dict[str, tuple[str, ...]] = {
+    "theme_impact_review":                ("題材", "產業"),
+    "shipping_rate_impact_review":        ("航運", "SCFI"),
+    "electricity_cost_impact_review":     ("電價", "成本"),
+    "macro_yield_sentiment_review":       ("CPI", "殖利率"),
+    "guidance_reaction_review":           ("法說", "指引"),
+    "listing_revenue_review":             ("上市", "營收"),
+    "monthly_revenue_yoy_review":         ("月營收",),
+    "margin_turnaround_review":           ("毛利率", "轉正"),
+    "gross_margin_comparison_review":     ("毛利率", "比較"),
+    "pe_valuation_review":                ("本益比",),
+    "fundamental_pe_review":              ("基本面", "本益比"),
+    "price_range":                        ("股價區間",),
+    "price_outlook":                      ("股價", "展望"),
+    "dividend_yield_review":              ("股利", "殖利率"),
+    "ex_dividend_performance":            ("除息", "填息"),
+    "fcf_dividend_sustainability_review": ("股利", "現金流"),
+    "debt_dividend_safety_review":        ("股利", "負債"),
+    "profitability_stability_review":     ("獲利", "穩定性"),
+    "revenue_growth_review":              ("營收", "成長"),
+    "technical_indicator_review":         ("技術面",),
+    "season_line_margin_review":          ("季線", "籌碼"),
+    "earnings_summary":                   ("財報",),
+    "eps_dividend_review":                ("EPS", "股利"),
+    "investment_support":                 ("投資評估", "基本面", "本益比"),
+    "risk_review":                        ("風險",),
+    "announcement_summary":               ("公告",),
+}
+
+
+def _intent_from_signature(signature: str) -> Intent:
+    return _RULE_SIGNATURE_TO_INTENT.get(signature, Intent.NEWS_DIGEST)
+
+
+_VALID_INTENT_VALUES: frozenset[str] = frozenset(intent.value for intent in Intent)
 _VALID_TIME_RANGE_LABELS: frozenset[str] = frozenset(
     {"1d", "7d", "30d", "latest_quarter", "1y", "3y", "5y"}
 )
@@ -413,35 +484,9 @@ class InputLayer:
         "\u6700\u65b0\u89c0\u9ede",
     )
     # --- Phase 1/2: topic tag infrastructure ---
-    # Single authoritative QUESTION_TYPE_FALLBACK_TOPIC_TAGS
-    QUESTION_TYPE_FALLBACK_TOPIC_TAGS: dict[str, tuple[str, ...]] = {
-        "theme_impact_review": ("題材", "產業"),
-        "shipping_rate_impact_review": ("航運", "SCFI"),
-        "electricity_cost_impact_review": ("電價", "成本"),
-        "macro_yield_sentiment_review": ("CPI", "殖利率"),
-        "guidance_reaction_review": ("法說", "指引"),
-        "listing_revenue_review": ("上市", "營收"),
-        "monthly_revenue_yoy_review": ("月營收",),
-        "margin_turnaround_review": ("毛利率", "轉正"),
-        "gross_margin_comparison_review": ("毛利率", "比較"),
-        "pe_valuation_review": ("本益比",),
-        "fundamental_pe_review": ("基本面", "本益比"),
-        "price_range": ("股價區間",),
-        "price_outlook": ("股價", "展望"),
-        "dividend_yield_review": ("股利", "殖利率"),
-        "ex_dividend_performance": ("除息", "填息"),
-        "fcf_dividend_sustainability_review": ("股利", "現金流"),
-        "debt_dividend_safety_review": ("股利", "負債"),
-        "profitability_stability_review": ("獲利", "穩定性"),
-        "revenue_growth_review": ("營收", "成長"),
-        "technical_indicator_review": ("技術面",),
-        "season_line_margin_review": ("季線", "籌碼"),
-        "earnings_summary": ("財報",),
-        "eps_dividend_review": ("EPS", "股利"),
-        "investment_support": ("投資評估",),
-        "risk_review": ("風險",),
-        "announcement_summary": ("公告",),
-    }
+    # Note: Wave 4 Stage 6b 將 question_type → fallback tags 對照表移至
+    # 模組層的 ``_RULE_SIGNATURE_FALLBACK_TAGS``（僅 InputLayer 內部使用，
+    # 不再出現在對外路由中）。
 
     _TOPIC_TAG_KEYWORD_MAP: dict[TopicTag, tuple[str, ...]] = {
         # ── 原有分類（擴充關鍵字）──
@@ -680,14 +725,8 @@ class InputLayer:
             controlled_tags=classification["controlled_tags"],
             free_keywords=classification["free_keywords"],
             tag_source=classification["tag_source"],
-            question_type=classification["question_type"],
             stance_bias=classification["stance_bias"],
             classifier_source=classification["classifier_source"],
-            is_forecast_query=classification["is_forecast_query"],
-            wants_direction=classification["wants_direction"],
-            wants_scenario_range=classification["wants_scenario_range"],
-            forecast_horizon_label=classification["forecast_horizon_label"],
-            forecast_horizon_days=classification["forecast_horizon_days"],
         )
 
     def _classify_semantics(
@@ -703,17 +742,29 @@ class InputLayer:
           2. 若 self._classifier 存在，呼叫 LLM 取得候選值
           3. 對 LLM 每個欄位獨立驗證，合法就採用、否則沿用規則
           4. 根據「多少欄位最終來自 LLM」決定 classifier_source
+
+        Wave 4 Stage 6b：對外路由只看 ``intent + controlled_tags +
+        time_range + stance_bias``；舊 ``question_type`` 字串僅作為內部
+        rule-based 分類器的 signature，透過 ``_intent_from_signature`` /
+        ``_RULE_SIGNATURE_FALLBACK_TAGS`` 翻譯成新路由欄位，不再外洩。
         """
         # ── Rule-based fallback values (always computed) ──
         topic = request.topic or self._detect_topic(query_text)
-        rule_qtype = self._detect_question_type(query_text, topic, stock_mention_count)
+        rule_signature = self._detect_question_type(
+            query_text, topic, stock_mention_count,
+        )
+        rule_intent = _intent_from_signature(rule_signature)
+        rule_controlled_tags, rule_free_keywords = self._extract_topic_tags(
+            query_text, rule_signature,
+        )
         rule_time_label, rule_time_days = self._detect_time_range(
-            query_text, request.time_range, topic, rule_qtype,
+            query_text,
+            request.time_range,
+            topic,
+            rule_intent,
+            rule_controlled_tags,
         )
         rule_stance = self._detect_stance_bias(query_text)
-        rule_is_fc, rule_dir, rule_range, rule_hz_label, rule_hz_days = (
-            self._detect_forecast_semantics(query_text, rule_qtype)
-        )
 
         # ── LLM classification (None = pure rule mode) ──
         llm_result: dict | None = None
@@ -723,15 +774,10 @@ class InputLayer:
                 llm_result = None
 
         # 預設值：任何欄位只在 LLM 值通過驗證時才覆蓋 rule 結果。
-        final_qtype: str = rule_qtype
+        final_intent: Intent = rule_intent
         final_topic_tag_values: list[str] | None = None  # None = 沿用規則的 controlled/free
         final_time_label: str = rule_time_label
         final_stance: StanceBias = rule_stance
-        final_is_fc: bool = rule_is_fc
-        final_dir: bool = rule_dir
-        final_range: bool = rule_range
-        final_hz_label: str | None = rule_hz_label
-        final_hz_days: int | None = rule_hz_days
         llm_used_count = 0
         rule_used_count = 0
 
@@ -741,10 +787,11 @@ class InputLayer:
                     return transform(llm_value), True
                 return rule_value, False
 
-            final_qtype, used_llm = pick(
-                llm_result.get("question_type"),
-                rule_qtype,
-                lambda value: value in _VALID_QUESTION_TYPES,
+            final_intent, used_llm = pick(
+                llm_result.get("intent"),
+                rule_intent,
+                lambda value: isinstance(value, str) and value in _VALID_INTENT_VALUES,
+                Intent,
             )
             llm_used_count += int(used_llm)
             rule_used_count += int(not used_llm)
@@ -777,56 +824,19 @@ class InputLayer:
             )
             llm_used_count += int(used_llm)
             rule_used_count += int(not used_llm)
-            final_is_fc, used_llm = pick(
-                llm_result.get("is_forecast_query"),
-                rule_is_fc,
-                lambda value: isinstance(value, bool),
-            )
-            llm_used_count += int(used_llm)
-            rule_used_count += int(not used_llm)
-            final_dir, used_llm = pick(
-                llm_result.get("wants_direction"),
-                rule_dir,
-                lambda value: isinstance(value, bool),
-            )
-            llm_used_count += int(used_llm)
-            rule_used_count += int(not used_llm)
-            final_range, used_llm = pick(
-                llm_result.get("wants_scenario_range"),
-                rule_range,
-                lambda value: isinstance(value, bool),
-            )
-            llm_used_count += int(used_llm)
-            rule_used_count += int(not used_llm)
-            final_hz_label, used_llm = pick(
-                llm_result.get("forecast_horizon_label"),
-                rule_hz_label,
-                lambda value: value is None or isinstance(value, str),
-            )
-            llm_used_count += int(used_llm)
-            rule_used_count += int(not used_llm)
-            final_hz_days, used_llm = pick(
-                llm_result.get("forecast_horizon_days"),
-                rule_hz_days,
-                lambda value: value is None or (
-                    isinstance(value, int)
-                    and not isinstance(value, bool)
-                    and value > 0
-                ),
-            )
-            llm_used_count += int(used_llm)
-            rule_used_count += int(not used_llm)
 
         # ── 組裝衍生欄位 ──
-        intent = infer_intent_from_question_type(final_qtype)
         final_time_days = _TIME_RANGE_DAYS.get(final_time_label, rule_time_days)
 
-        # topic_tags：若 LLM 提供合法清單，轉為 TopicTag；否則用規則抽取
+        # topic_tags：若 LLM 提供合法清單，轉為 TopicTag；否則沿用規則結果
+        # （無論 LLM 是否替換了 intent，都沿用規則 signature 算好的 tag／free
+        # keywords——我們沒有 intent→signature 的反向表，也沒必要重跑規則）
         if final_topic_tag_values is not None:
             controlled_tags = [TopicTag(v) for v in final_topic_tag_values]
             free_keywords: list[str] = []
         else:
-            controlled_tags, free_keywords = self._extract_topic_tags(query_text, final_qtype)
+            controlled_tags = rule_controlled_tags
+            free_keywords = rule_free_keywords
         tag_source = "matched" if controlled_tags else "fallback" if free_keywords else "empty"
 
         # ── classifier_source 判定 ──
@@ -839,8 +849,7 @@ class InputLayer:
 
         return {
             "topic": topic,
-            "question_type": final_qtype,
-            "intent": intent,
+            "intent": final_intent,
             "controlled_tags": controlled_tags,
             "free_keywords": free_keywords,
             "tag_source": tag_source,
@@ -848,11 +857,6 @@ class InputLayer:
             "time_range_days": final_time_days,
             "stance_bias": final_stance,
             "classifier_source": classifier_source,
-            "is_forecast_query": final_is_fc,
-            "wants_direction": final_dir,
-            "wants_scenario_range": final_range,
-            "forecast_horizon_label": final_hz_label,
-            "forecast_horizon_days": final_hz_days,
         }
 
     def _extract_ticker(self, query: str) -> str | None:
@@ -987,8 +991,15 @@ class InputLayer:
         query: str,
         explicit_range: str | None,
         topic: Topic,
-        question_type: str,
+        intent: Intent,
+        controlled_tags: list[TopicTag],
     ) -> tuple[str, int]:
+        """解析查詢的時間範圍。
+
+        Wave 4 Stage 6b：主路徑改以 ``resolve_by_tags(intent,
+        controlled_tags)`` 查表，不再依賴 ``question_type``；原本的 Step 4
+        ``question_type`` if-elif 對照表已在 Stage 4 移除。
+        """
         mapping = {
             "1d": ("1d", 1),
             "7d": ("7d", 7),
@@ -1024,58 +1035,30 @@ class InputLayer:
         if any(token in query for token in ("\u6700\u65b0\u4e00\u5b63", "\u6700\u8fd1\u4e00\u5b63", "\u4e0a\u4e00\u5b63", "\u672c\u5b63")):
             return mapping["latest_quarter"]
 
-        # Step 3：向 PolicyRegistry 查詢 question_type 對應的預設時間窗口
-        intent = QUESTION_TYPE_TO_INTENT.get(question_type)
-        if intent is not None:
-            try:
-                from llm_stock_system.core.query_policy import get_policy_registry
+        # Step 3：向 PolicyRegistry 查詢預設時間窗口
+        # 以 controlled_tags 做 tag-based 路由；若 match_type 為 "exact" 或
+        # "partial"（代表確實命中某支具體 policy），即使用該 policy 的預設值。
+        # Wave 4 Stage 6a：移除舊的 question_type 精確查表 fallback；
+        # 完整 intent/tag 路由由 Step 3 一次回應，剩下未命中的由 Step 4
+        # topic-level 兜底。
+        try:
+            from llm_stock_system.core.query_policy import get_policy_registry
 
-                policy = get_policy_registry().resolve(intent, question_type)
-                if policy.default_time_range_days is not None:
-                    label = policy.default_time_range_label or f"{policy.default_time_range_days}d"
-                    return label, policy.default_time_range_days
-            except Exception:
-                pass  # fallback 到下方 question_type 對照表
+            registry = get_policy_registry()
+            tag_policy = registry.resolve_by_tags(intent, controlled_tags)
+            if (
+                tag_policy.match_type in ("exact", "partial")
+                and tag_policy.default_time_range_days is not None
+            ):
+                label = tag_policy.default_time_range_label or f"{tag_policy.default_time_range_days}d"
+                return label, tag_policy.default_time_range_days
+        except Exception:
+            pass  # fallback 到下方 topic/最終預設
 
-        # Step 4：原有 question_type 對照表（暫時保留為 fallback，待所有 policy 補齊後移除）
-        if question_type == "monthly_revenue_yoy_review":
-            return mapping["1y"]
-        if question_type == "fundamental_pe_review":
-            return mapping["1y"]
-        if question_type == "price_outlook":
-            return mapping["30d"]
-        if question_type == "guidance_reaction_review":
-            return mapping["30d"]
-        if question_type == "shipping_rate_impact_review":
-            return mapping["30d"]
-        if question_type == "electricity_cost_impact_review":
-            return mapping["30d"]
-        if question_type == "macro_yield_sentiment_review":
-            return mapping["30d"]
-        if question_type == "listing_revenue_review":
-            return mapping["30d"]
-        if question_type == "profitability_stability_review":
-            return mapping["5y"]
-        if question_type == "fcf_dividend_sustainability_review":
-            return mapping["3y"]
-        if question_type == "pe_valuation_review":
-            return mapping["1y"]
-        if question_type == "gross_margin_comparison_review":
-            return mapping["latest_quarter"]
-        if question_type == "debt_dividend_safety_review":
-            return mapping["3y"]
-        if question_type in {"eps_dividend_review", "dividend_yield_review", "ex_dividend_performance"}:
-            return mapping["1y"]
-        if question_type == "revenue_growth_review":
-            return mapping["latest_quarter"]
-        if question_type == "theme_impact_review":
-            return mapping["30d"]
-        if question_type == "season_line_margin_review":
-            return "90d", 90
-        if question_type == "technical_indicator_review":
-            return mapping["30d"]
-
-        # Step 5：topic 與最終 fallback
+        # Step 4（原 Step 5）：topic 與最終 fallback
+        # Wave 4 Stage 4：舊的 question_type if-elif 對照表已刪除；所有
+        # 原本在此表的分支已全數登記在 PolicyRegistry 的 default_time_range，
+        # 由 Step 3 統一回應。這裡只保留 topic-level 的兜底規則。
         if topic == Topic.EARNINGS:
             return mapping["latest_quarter"]
         return mapping["7d"]
@@ -1423,7 +1406,7 @@ class InputLayer:
         return "market_summary"
 
     def _extract_topic_tags(
-        self, query: str, question_type: str
+        self, query: str, rule_signature: str
     ) -> tuple[list["TopicTag"], list[str]]:
         """Extract topic tags from the user query.
 
@@ -1433,8 +1416,11 @@ class InputLayer:
         - ``free_keywords``: the specific raw keywords that triggered each tag
           (used as search terms in the Retrieval Layer)
 
-        Falls back to ``QUESTION_TYPE_FALLBACK_TOPIC_TAGS`` (as plain strings in
-        ``free_keywords``) when no keyword in the query matches the map.
+        Falls back to ``_RULE_SIGNATURE_FALLBACK_TAGS`` (as plain strings in
+        ``free_keywords``) when no keyword in the query matches the map. The
+        ``rule_signature`` parameter is the internal rule-based classifier
+        output (see ``_detect_question_type``); it is **not** exposed outside
+        ``InputLayer``.
         """
         from llm_stock_system.core.enums import TopicTag as _TopicTag
 
@@ -1480,82 +1466,8 @@ class InputLayer:
         if tag_order:
             return tag_order, matched_keywords
 
-        fallback = self.QUESTION_TYPE_FALLBACK_TOPIC_TAGS.get(question_type, ())
+        fallback = _RULE_SIGNATURE_FALLBACK_TAGS.get(rule_signature, ())
         return [], list(fallback)
-
-    def _detect_forecast_semantics(
-        self, query: str, question_type: str,
-    ) -> tuple[bool, bool, bool, str | None, int | None]:
-        """Return (is_forecast, wants_direction, wants_range, horizon_label, horizon_days).
-
-        A query is a forecast query if question_type == price_outlook AND
-        it contains forward-looking time/demand signals.
-        """
-        if question_type != "price_outlook":
-            return False, False, False, None, None
-
-        compacted = self._compact_query(query)
-
-        # Determine if the query has forward-looking signals
-        has_time_window = any(
-            kw in query or kw.lower().replace(" ", "") in compacted
-            for kw in self.FORECAST_TIME_WINDOW_KEYWORDS
-        )
-        has_demand = any(
-            kw in query or kw.lower().replace(" ", "") in compacted
-            for kw in self.FORECAST_DEMAND_KEYWORDS
-        )
-        has_outlook_kw = any(
-            kw in query or kw.lower().replace(" ", "") in compacted
-            for kw in self.PRICE_OUTLOOK_KEYWORDS
-        )
-        is_forecast = has_outlook_kw or (has_time_window and has_demand)
-
-        if not is_forecast:
-            return False, False, False, None, None
-
-        # Direction demand
-        direction_tokens = (
-            "漲", "跌", "偏多", "偏空", "看漲", "看跌", "會上漲", "會下跌",
-            "漲還是跌", "走勢", "目標價",
-        )
-        wants_direction = any(t in query for t in direction_tokens)
-
-        # Range demand
-        range_tokens = ("區間", "預估區間", "波動", "波動如何", "高低點")
-        wants_range = any(t in query for t in range_tokens)
-
-        # Horizon detection
-        horizon_label, horizon_days = self._detect_forecast_horizon(query)
-
-        return is_forecast, wants_direction, wants_range, horizon_label, horizon_days
-
-    def _detect_forecast_horizon(self, query: str) -> tuple[str | None, int | None]:
-        """Parse forward-looking horizon from the query text."""
-        compacted = self._compact_query(query)
-
-        horizon_map: list[tuple[tuple[str, ...], str, int]] = [
-            (("明天", "明日"), "明天", 1),
-            (("後天",), "後天", 2),
-            (("這週", "這一週", "這個星期", "這一個星期"), "本週", 7),
-            (("下週", "下一週", "下個星期"), "下週", 7),
-            (("一週", "一個星期", "一星期", "7天"), "未來一週", 7),
-            (("兩週", "兩個星期", "二週", "14天"), "未來兩週", 14),
-            (("一個月", "下個月", "30天"), "未來一個月", 30),
-            (("一季", "三個月"), "未來一季", 90),
-            (("半年", "六個月"), "未來半年", 180),
-            (("一年",), "未來一年", 365),
-        ]
-
-        for tokens, label, days in horizon_map:
-            if any(t in query or t.lower().replace(" ", "") in compacted for t in tokens):
-                return label, days
-
-        # Default: if a future window keyword exists but no specific length, assume one week
-        if any(t in query or t.lower().replace(" ", "") in compacted for t in self.FORECAST_TIME_WINDOW_KEYWORDS):
-            return "未來", 7
-
-        return None, None
 
     def _detect_stance_bias(self, query: str) -> StanceBias:
         compacted = self._compact_query(query)

@@ -11,7 +11,7 @@ class IntentMetadataTestCase(unittest.TestCase):
             user_query="台積電 2330 基本面跟本益比如何？",
             ticker="2330",
             company_name="台積電",
-            question_type="fundamental_pe_review",
+            intent=Intent.VALUATION_CHECK,
             time_range_label="1y",
             time_range_days=365,
         )
@@ -41,7 +41,7 @@ class IntentMetadataTestCase(unittest.TestCase):
             user_query="中華電 2412 股利安不安全？",
             ticker="2412",
             company_name="中華電信",
-            question_type="debt_dividend_safety_review",
+            intent=Intent.DIVIDEND_ANALYSIS,
             preferred_facets={DataFacet.NEWS},
         )
 
@@ -64,7 +64,6 @@ class IntentMetadataTestCase(unittest.TestCase):
             )
         )
 
-        self.assertEqual(query.question_type, "shipping_rate_impact_review")
         self.assertEqual(query.intent, Intent.NEWS_DIGEST)
         self.assertEqual(query.required_facets, {DataFacet.NEWS})
         self.assertEqual(query.preferred_facets, {DataFacet.PRICE_HISTORY})
@@ -77,7 +76,6 @@ class IntentMetadataTestCase(unittest.TestCase):
     def test_input_layer_uses_fallback_keywords_when_no_controlled_tag_matches(self) -> None:
         query = StructuredQuery(
             user_query="市場摘要",
-            question_type="market_summary",
             free_keywords=["市場"],
             tag_source="fallback",
         )
@@ -89,25 +87,11 @@ class IntentMetadataTestCase(unittest.TestCase):
     def test_input_layer_maps_fundamental_pe_to_valuation_intent(self) -> None:
         query = InputLayer().parse(QueryRequest(query="台積電 2330 基本面跟本益比如何？"))
 
-        self.assertEqual(query.question_type, "fundamental_pe_review")
         self.assertEqual(query.intent, Intent.VALUATION_CHECK)
         self.assertIn(TopicTag.VALUATION, query.controlled_tags)
         self.assertIn(TopicTag.FUNDAMENTAL, query.controlled_tags)
         self.assertIn("基本面", query.topic_tags)
         self.assertIn("本益比", query.topic_tags)
-
-
-    def test_question_type_backfills_earnings_review_intent_and_facets(self) -> None:
-        query = StructuredQuery(
-            user_query="月營收年增率",
-            ticker="2330",
-            question_type="monthly_revenue_yoy_review",
-        )
-
-        self.assertEqual(query.intent, Intent.EARNINGS_REVIEW)
-        self.assertEqual(query.required_facets, {DataFacet.FINANCIAL_STATEMENTS})
-        self.assertIn(DataFacet.MONTHLY_REVENUE, query.preferred_facets)
-        self.assertIn(DataFacet.NEWS, query.preferred_facets)
 
 
 if __name__ == "__main__":

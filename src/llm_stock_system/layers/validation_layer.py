@@ -1,8 +1,8 @@
 import logging
 from datetime import datetime, timedelta, timezone
 
-from llm_stock_system.core.enums import ConfidenceLight, ConsistencyStatus, ForecastMode, FreshnessStatus, QueryProfile, StanceBias
-from llm_stock_system.core.models import AnswerDraft, ForecastBlock, GovernanceReport, StructuredQuery, ValidationResult
+from llm_stock_system.core.enums import ConfidenceLight, ConsistencyStatus, FreshnessStatus, QueryProfile, StanceBias
+from llm_stock_system.core.models import AnswerDraft, GovernanceReport, StructuredQuery, ValidationResult
 from llm_stock_system.core.validation_profiles import ConditionKind, ValidationProfile, ValidationRule, get_profile
 
 logger = logging.getLogger(__name__)
@@ -32,14 +32,6 @@ class ValidationLayer:
         self._digest_low_source_penalty = digest_low_source_penalty
         self._digest_stale_penalty = digest_stale_penalty
 
-    # Forecast-specific confidence caps — forecast answers must never look
-    # as confident as grounded historical answers.
-    _FORECAST_MODE_CAPS: dict[ForecastMode, float] = {
-        ForecastMode.SCENARIO_ESTIMATE: 0.65,
-        ForecastMode.HISTORICAL_PROXY: 0.45,
-        ForecastMode.UNSUPPORTED: 0.25,
-    }
-
     def validate(
         self,
         query: StructuredQuery,
@@ -58,12 +50,6 @@ class ValidationLayer:
             confidence_score,
             warnings,
         )
-        confidence_score = self._apply_forecast_cap(
-            query,
-            answer_draft,
-            confidence_score,
-            warnings,
-        )
         confidence_score = self._apply_required_facet_cap(
             query,
             facet_miss_list,
@@ -76,7 +62,7 @@ class ValidationLayer:
             confidence_score,
             warnings,
         )
-        confidence_score = self._apply_question_type_rules(
+        confidence_score = self._apply_intent_profile_rules(
             query,
             governance_report,
             answer_draft,
@@ -176,8 +162,8 @@ class ValidationLayer:
     ) -> float:
         """檢查本次查詢的 policy 是否要求最低 evidence 數量。
 
-        使用 intent + topic_tags 路由（不依賴 question_type），
-        與 Phase 2+ 的 routing 主軸一致。
+        使用 intent + controlled_tags 路由（不依賴 question_type），
+        與 Wave 4 的 routing 主軸一致。
 
         若 evidence 數量不足 policy.min_evidence_count，
         將信心分上限壓到 YELLOW（0.75），並加 warning 說明缺少幾篇。
@@ -193,47 +179,14 @@ class ValidationLayer:
                 cap = 0.75  # YELLOW 上限
                 if confidence_score > cap:
                     confidence_score = cap
-                # 用 policy.question_type 標記查詢類型（僅供 warning 說明，不影響路由）
+                # 以 intent 名稱標記查詢類型（warning 只作說明，不影響路由）
                 warnings.append(
-                    f"此查詢類型（{policy.question_type}）需要至少 {min_count} 篇證據，"
+                    f"此查詢類型（{query.intent.value}）需要至少 {min_count} 篇證據，"
                     f"目前只有 {actual_count} 篇。信心分上限 {cap}。"
                 )
         except Exception:
             # Registry 不可用時靜默忽略，不影響現有邏輯
             pass
-        return confidence_score
-
-    def _apply_forecast_cap(
-        self,
-        query: StructuredQuery,
-        answer_draft: AnswerDraft,
-        confidence_score: float,
-        warnings: list[str],
-    ) -> float:
-        """Apply forecast-specific confidence ceiling.
-
-        scenario_estimate ≤ 0.65 (never green),
-        historical_proxy  ≤ 0.45,
-        unsupported       ≤ 0.25.
-        """
-        if not query.is_forecast_query:
-            return confidence_score
-
-        forecast = answer_draft.forecast
-        if forecast is None:
-            return confidence_score
-
-        cap = self._FORECAST_MODE_CAPS.get(forecast.mode)
-        if cap is not None and confidence_score > cap:
-            confidence_score = cap
-
-        if forecast.mode == ForecastMode.SCENARIO_ESTIMATE:
-            warnings.append("此回答為情境推估，信心上限不超過 0.65。")
-        elif forecast.mode == ForecastMode.HISTORICAL_PROXY:
-            warnings.append("僅以歷史波動代理，信心上限不超過 0.45。")
-        elif forecast.mode == ForecastMode.UNSUPPORTED:
-            warnings.append("缺乏前瞻依據，信心上限不超過 0.25。")
-
         return confidence_score
 
     def _apply_required_facet_cap(
@@ -437,7 +390,7 @@ class ValidationLayer:
             confidence_score = min(confidence_score, float(cap))
         return confidence_score
 
-    def _apply_question_type_rules(
+    def _apply_intent_profile_rules(
         self,
         query: StructuredQuery,
         governance_report: GovernanceReport,
@@ -445,6 +398,12 @@ class ValidationLayer:
         confidence_score: float,
         warnings: list[str],
     ) -> float:
+        """Apply intent-keyed validation profile rules.
+
+        Wave 4 Stage 5 rename: previously `_apply_question_type_rules`. The
+        method has always keyed on ``query.intent`` via :func:`get_profile`,
+        so the rename only clarifies intent.
+        """
         profile = get_profile(query.intent)
         if profile is None:
             return confidence_score

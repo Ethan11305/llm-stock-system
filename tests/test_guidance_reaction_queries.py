@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 import unittest
 
 from llm_stock_system.adapters.llm import RuleBasedSynthesisClient
-from llm_stock_system.core.enums import SourceTier
+from llm_stock_system.core.enums import Intent, SourceTier
 from llm_stock_system.core.models import Evidence, GovernanceReport, QueryRequest
 from llm_stock_system.layers.input_layer import InputLayer
 
@@ -17,7 +17,7 @@ class GuidanceReactionQueryTestCase(unittest.TestCase):
 
         self.assertEqual(query.ticker, "2454")
         self.assertEqual(query.company_name, "聯發科")
-        self.assertEqual(query.question_type, "guidance_reaction_review")
+        self.assertEqual(query.intent, Intent.NEWS_DIGEST)
         self.assertEqual(query.time_range_days, 30)
 
     def test_rule_based_summary_reports_mixed_guidance_reaction(self) -> None:

@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 import unittest
 
 from llm_stock_system.adapters.llm import RuleBasedSynthesisClient
-from llm_stock_system.core.enums import SourceTier
+from llm_stock_system.core.enums import Intent, SourceTier
 from llm_stock_system.core.models import Evidence, GovernanceReport, QueryRequest
 from llm_stock_system.layers.input_layer import InputLayer
 
@@ -20,7 +20,7 @@ class MacroYieldSentimentQueryTestCase(unittest.TestCase):
 
         self.assertEqual(query.ticker, "2412")
         self.assertEqual(query.company_name, "中華電信")
-        self.assertEqual(query.question_type, "macro_yield_sentiment_review")
+        self.assertEqual(query.intent, Intent.NEWS_DIGEST)
         self.assertEqual(query.time_range_days, 30)
 
     def test_rule_based_summary_reports_macro_yield_sentiment(self) -> None:

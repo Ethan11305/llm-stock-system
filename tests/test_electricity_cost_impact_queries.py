@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 import unittest
 
 from llm_stock_system.adapters.llm import RuleBasedSynthesisClient
-from llm_stock_system.core.enums import SourceTier
+from llm_stock_system.core.enums import Intent, SourceTier
 from llm_stock_system.core.models import Evidence, GovernanceReport, QueryRequest
 from llm_stock_system.layers.input_layer import InputLayer
 
@@ -22,7 +22,7 @@ class ElectricityCostImpactQueryTestCase(unittest.TestCase):
         self.assertEqual(query.company_name, "中鋼")
         self.assertEqual(query.comparison_ticker, "1101")
         self.assertEqual(query.comparison_company_name, "台泥")
-        self.assertEqual(query.question_type, "electricity_cost_impact_review")
+        self.assertEqual(query.intent, Intent.NEWS_DIGEST)
         self.assertEqual(query.time_range_days, 30)
 
     def test_rule_based_summary_reports_cost_pressure_and_responses(self) -> None:

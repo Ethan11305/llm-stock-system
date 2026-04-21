@@ -39,7 +39,6 @@ def make_query(
     comparison_ticker: str | None = None,
     comparison_company_name: str | None = None,
     topic: Topic = Topic.COMPOSITE,
-    question_type: str = "market_summary",
 ) -> StructuredQuery:
     return StructuredQuery(
         user_query=user_query,
@@ -50,7 +49,6 @@ def make_query(
         topic=topic,
         intent=intent,
         topic_tags=topic_tags or [],
-        question_type=question_type,
     )
 
 
@@ -275,19 +273,6 @@ class PostgresRetrievalProfileTestCase(unittest.TestCase):
             "investment_announcement",
         )
 
-    def test_legacy_question_type_backfills_topic_tags_for_resolver(self) -> None:
-        query = StructuredQuery(
-            user_query="這檔主要風險有哪些",
-            ticker="2330",
-            company_name="台積電",
-            question_type="risk_review",
-        )
-
-        profile = self.gateway._resolve_retrieval_profile(query)
-
-        self.assertEqual(profile.key, "investment_risk")
-        self.assertIn("風險", query.topic_tags)
-
     def test_build_news_search_terms_static_profile_includes_expected_labels(self) -> None:
         query = make_query(
             user_query="長榮和陽明還會受惠 SCFI 嗎？",
@@ -327,7 +312,6 @@ class PostgresRetrievalProfileTestCase(unittest.TestCase):
             user_query="請整理不如預期與下修的市場反應",
             intent=Intent.NEWS_DIGEST,
             topic_tags=[],
-            question_type="market_summary",
         )
 
         terms = self.gateway._build_news_search_terms(query, "台積電")

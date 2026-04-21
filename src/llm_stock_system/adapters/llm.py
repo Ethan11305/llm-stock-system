@@ -1,16 +1,6 @@
 from llm_stock_system.core.enums import Intent
-from llm_stock_system.core.fundamental_valuation import (
-    build_fundamental_valuation_facts,
-    build_fundamental_valuation_highlights,
-    is_fundamental_valuation_question,
-)
 from llm_stock_system.core.interfaces import LLMClient
 from llm_stock_system.core.models import AnswerDraft, GovernanceReport, SourceCitation, StructuredQuery
-from llm_stock_system.core.target_price import (
-    build_forward_price_fact,
-    build_forward_price_highlight,
-    is_forward_price_question,
-)
 
 from .synthesis.registry import get_strategy
 
@@ -64,18 +54,11 @@ class RuleBasedSynthesisClient(LLMClient):
             for item in governance_report.evidence[:3]
         ]
 
-        if is_fundamental_valuation_question(query):
-            highlights = build_fundamental_valuation_highlights(query, governance_report)
-            facts = build_fundamental_valuation_facts(query, governance_report)
-        elif query.intent in {Intent.EARNINGS_REVIEW, Intent.FINANCIAL_HEALTH, Intent.TECHNICAL_VIEW}:
+        if query.intent in {Intent.EARNINGS_REVIEW, Intent.FINANCIAL_HEALTH, Intent.TECHNICAL_VIEW}:
             highlights = [
                 item.excerpt[:120] if item.excerpt else f"{item.title}（{item.source_name}）"
                 for item in governance_report.evidence[:3]
             ]
-
-        if query.intent == Intent.VALUATION_CHECK and is_forward_price_question(query):
-            highlights = [build_forward_price_highlight(query, governance_report), *highlights][:3]
-            facts = [build_forward_price_fact(query, governance_report), *facts][:3]
 
         strategy = get_strategy(query.intent)
         risks = strategy.build_risks(query, governance_report)

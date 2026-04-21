@@ -117,27 +117,13 @@ class TopicTag(str, Enum):
 class QueryProfile(str, Enum):
     """最高階的產品分流欄位。
 
-    - ``LEGACY``：沿用 question_type 衍生 intent 的舊路徑。
+    - ``LEGACY``：沿用 intent + controlled_tags 的通用路徑。
     - ``SINGLE_STOCK_DIGEST``：單股近 7 天新聞/公告/綜合 digest 可信產品線。
 
-    Digest 路徑裡主流程只看 ``query_profile + intent + topic + topic_tags +
-    time_range``；``question_type`` 僅保留作為相容與分析標籤，不再參與控制流。
+    Wave 4 起，所有路徑主流程只看 ``query_profile + intent + topic +
+    controlled_tags + time_range``；question_type 已不再參與控制流，僅在
+    Stage 6 前作為 InputLayer 內部分析欄位暫存。
     """
 
     LEGACY = "legacy"
     SINGLE_STOCK_DIGEST = "single_stock_digest"
-
-
-class ForecastMode(str, Enum):
-    """How the forecast was derived."""
-    SCENARIO_ESTIMATE = "scenario_estimate"
-    HISTORICAL_PROXY = "historical_proxy"
-    UNSUPPORTED = "unsupported"
-
-
-class ForecastDirection(str, Enum):
-    """Directional bias for a forecast."""
-    BULLISH_BIAS = "bullish_bias"
-    BEARISH_BIAS = "bearish_bias"
-    RANGE_BOUND = "range_bound"
-    UNDETERMINED = "undetermined"

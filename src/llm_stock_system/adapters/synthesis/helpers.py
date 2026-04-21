@@ -33,35 +33,6 @@ def extract_price_range(report: GovernanceReport) -> tuple[str | None, str | Non
     return None, None
 
 
-def extract_company_margin(report: GovernanceReport, company_name: str) -> str | None:
-    pattern = re.compile(rf"{re.escape(company_name)}[^。；]*?毛利率約 (\d+(?:\.\d+)?)%")
-    for evidence in report.evidence:
-        match = pattern.search(evidence.excerpt)
-        if match:
-            return match.group(1)
-    return None
-
-
-def extract_year_metric_pairs(
-    report: GovernanceReport,
-    pattern: str,
-) -> list[tuple[str, str]]:
-    compiled = re.compile(pattern)
-    pairs: list[tuple[str, str]] = []
-    seen_years: set[str] = set()
-    for evidence in report.evidence:
-        match = compiled.search(evidence.excerpt)
-        if not match:
-            continue
-        year, value = match.group(1), match.group(2)
-        if year in seen_years:
-            continue
-        seen_years.add(year)
-        pairs.append((year, value))
-    pairs.sort(key=lambda item: item[0])
-    return pairs
-
-
 def evidence_contains(report: GovernanceReport, keywords: tuple[str, ...]) -> bool:
     for evidence in report.evidence:
         haystack = f"{evidence.title} {evidence.excerpt}".lower()

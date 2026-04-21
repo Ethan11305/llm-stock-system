@@ -11,8 +11,6 @@ from .enums import (
     ConfidenceLight,
     ConsistencyStatus,
     DataFacet,
-    ForecastDirection,
-    ForecastMode,
     FreshnessStatus,
     Intent,
     QueryProfile,
@@ -22,85 +20,6 @@ from .enums import (
     Topic,
     TopicTag,
 )
-
-
-QUESTION_TYPE_TO_INTENT: dict[str, Intent] = {
-    "market_summary": Intent.NEWS_DIGEST,
-    "theme_impact_review": Intent.NEWS_DIGEST,
-    "shipping_rate_impact_review": Intent.NEWS_DIGEST,
-    "electricity_cost_impact_review": Intent.NEWS_DIGEST,
-    "macro_yield_sentiment_review": Intent.NEWS_DIGEST,
-    "guidance_reaction_review": Intent.NEWS_DIGEST,
-    "listing_revenue_review": Intent.NEWS_DIGEST,
-    "earnings_summary": Intent.EARNINGS_REVIEW,
-    "eps_dividend_review": Intent.EARNINGS_REVIEW,
-    "monthly_revenue_yoy_review": Intent.EARNINGS_REVIEW,
-    "margin_turnaround_review": Intent.EARNINGS_REVIEW,
-    "pe_valuation_review": Intent.VALUATION_CHECK,
-    "fundamental_pe_review": Intent.VALUATION_CHECK,
-    "price_range": Intent.VALUATION_CHECK,
-    "price_outlook": Intent.VALUATION_CHECK,
-    "dividend_yield_review": Intent.DIVIDEND_ANALYSIS,
-    "ex_dividend_performance": Intent.DIVIDEND_ANALYSIS,
-    "fcf_dividend_sustainability_review": Intent.DIVIDEND_ANALYSIS,
-    "debt_dividend_safety_review": Intent.DIVIDEND_ANALYSIS,
-    "profitability_stability_review": Intent.FINANCIAL_HEALTH,
-    "gross_margin_comparison_review": Intent.FINANCIAL_HEALTH,
-    "revenue_growth_review": Intent.FINANCIAL_HEALTH,
-    "technical_indicator_review": Intent.TECHNICAL_VIEW,
-    "season_line_margin_review": Intent.TECHNICAL_VIEW,
-    "investment_support": Intent.INVESTMENT_ASSESSMENT,
-    "risk_review": Intent.INVESTMENT_ASSESSMENT,
-    "announcement_summary": Intent.INVESTMENT_ASSESSMENT,
-}
-
-
-# Backward compatibility: when callers construct StructuredQuery with only
-# ``question_type`` (no controlled_tags / free_keywords), these fallback tags
-# are injected so Generation adapters can still route on topic_tags.
-QUESTION_TYPE_FALLBACK_TOPIC_TAGS: dict[str, tuple[str, ...]] = {
-    "theme_impact_review":              ("題材", "產業"),
-    "shipping_rate_impact_review":      ("航運", "SCFI"),
-    "electricity_cost_impact_review":   ("電價", "成本"),
-    "macro_yield_sentiment_review":     ("CPI", "殖利率"),
-    "guidance_reaction_review":         ("法說", "指引"),
-    "listing_revenue_review":           ("上市", "營收"),
-    "monthly_revenue_yoy_review":       ("月營收",),
-    "margin_turnaround_review":         ("毛利率", "轉正"),
-    "gross_margin_comparison_review":   ("毛利率", "比較"),
-    "pe_valuation_review":              ("本益比",),
-    "fundamental_pe_review":            ("基本面", "本益比"),
-    "price_range":                      ("股價區間",),
-    "price_outlook":                    ("股價", "展望"),
-    "dividend_yield_review":            ("股利", "殖利率"),
-    "ex_dividend_performance":          ("除息", "填息"),
-    "fcf_dividend_sustainability_review": ("股利", "現金流"),
-    "debt_dividend_safety_review":      ("股利", "負債"),
-    "profitability_stability_review":   ("獲利", "穩定性"),
-    "revenue_growth_review":            ("營收", "成長"),
-    "technical_indicator_review":       ("技術面",),
-    "season_line_margin_review":        ("季線", "籌碼"),
-    "earnings_summary":                 ("財報",),
-    "eps_dividend_review":              ("EPS", "股利"),
-    "investment_support":               ("投資評估", "基本面", "本益比"),
-    "risk_review":                      ("風險",),
-    "announcement_summary":             ("公告",),
-
-    # ── 新增 question_type fallback（對應新分類）──
-    "profitability_review":             ("獲利能力", "ROE"),
-    "operating_efficiency_review":      ("營運效率", "存貨週轉"),
-    "capex_rd_review":                  ("資本支出", "研發"),
-    "institutional_flow_review":        ("外資", "投信"),
-    "competitive_review":               ("競爭優勢", "市佔率"),
-    "supply_chain_review":              ("供應鏈", "供應商"),
-    "esg_review":                       ("ESG", "永續"),
-    "regulatory_review":                ("政策", "監管"),
-    "event_review":                     ("併購", "重大事件"),
-    "index_rebal_review":               ("MSCI", "指數調整"),
-    "fx_impact_review":                 ("匯率", "匯損"),
-    "sentiment_review":                 ("市場情緒", "VIX"),
-    "risk_mgmt_review":                 ("停損", "風險管理"),
-}
 
 
 @dataclass(frozen=True)
@@ -157,12 +76,6 @@ INTENT_FACETS: dict[Intent, frozenset[DataFacet]] = {
 }
 
 
-def infer_intent_from_question_type(question_type: str | None) -> Intent:
-    if question_type is None:
-        return Intent.NEWS_DIGEST
-    return QUESTION_TYPE_TO_INTENT.get(question_type, Intent.NEWS_DIGEST)
-
-
 def infer_data_facets(
     intent: Intent | str | None,
     extra_required: set[DataFacet | str] | list[DataFacet | str] | None = None,
@@ -193,27 +106,6 @@ def _dedupe_preserving_order(values: list[str]) -> list[str]:
     return deduped
 
 
-class ForecastWindow(BaseModel):
-    label: str
-    start_date: str
-    end_date: str
-
-
-class ScenarioRange(BaseModel):
-    low: float
-    high: float
-    basis_type: str  # e.g. "analyst_target", "historical_proxy", "support_resistance"
-
-
-class ForecastBlock(BaseModel):
-    """Structured forecast output attached to QueryResponse."""
-    mode: ForecastMode
-    forecast_window: ForecastWindow
-    direction: ForecastDirection = ForecastDirection.UNDETERMINED
-    scenario_range: ScenarioRange | None = None
-    forecast_basis: list[str] = Field(default_factory=list)
-
-
 class QueryRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -224,6 +116,16 @@ class QueryRequest(BaseModel):
 
 
 class StructuredQuery(BaseModel):
+    """Normalized representation of a user query after the Input layer.
+
+    Routing contract (Wave 4 final state)
+    -------------------------------------
+    ``intent`` + ``controlled_tags`` are the **single source of truth** for
+    every downstream layer (PolicyRegistry, retrieval profile, synthesis
+    strategy, validation profile). The legacy ``question_type`` string and
+    all helpers around it have been removed in Stage 6b.
+    """
+
     user_query: str
     ticker: str | None = None
     company_name: str | None = None
@@ -240,16 +142,9 @@ class StructuredQuery(BaseModel):
     free_keywords: list[str] = Field(default_factory=list)
     topic_tags: list[str] = Field(default_factory=list)
     tag_source: str = "empty"
-    question_type: str = "market_summary"
     stance_bias: StanceBias = StanceBias.NEUTRAL
     classifier_source: str = "rule"  # "rule" | "llm" | "mixed"
     query_profile: QueryProfile = QueryProfile.LEGACY
-    # --- Forecast semantic fields ---
-    is_forecast_query: bool = False
-    wants_direction: bool = False
-    wants_scenario_range: bool = False
-    forecast_horizon_label: str | None = None
-    forecast_horizon_days: int | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -258,9 +153,6 @@ class StructuredQuery(BaseModel):
             return data
 
         values = dict(data)
-        question_type = values.get("question_type")
-        if values.get("intent") in (None, ""):
-            values["intent"] = infer_intent_from_question_type(question_type)
 
         required_facets, preferred_facets = infer_data_facets(
             values.get("intent"),
@@ -271,33 +163,24 @@ class StructuredQuery(BaseModel):
         legacy_data_facets = set(values.get("data_facets") or [])
         preferred_facets |= legacy_data_facets - required_facets
 
-        # --- Forecast facet override ---
-        # price_outlook with is_forecast_query should require PRICE_HISTORY
-        # (not PE_VALUATION) and demote PE_VALUATION/NEWS to preferred.
-        if values.get("is_forecast_query") and question_type == "price_outlook":
-            required_facets = {DataFacet.PRICE_HISTORY}
-            preferred_facets = (preferred_facets | {DataFacet.PE_VALUATION, DataFacet.NEWS}) - required_facets
-
         values["required_facets"] = required_facets
         values["preferred_facets"] = preferred_facets
         values["data_facets"] = required_facets | preferred_facets
 
         controlled_tags = list(values.get("controlled_tags") or [])
         free_keywords = list(values.get("free_keywords") or [])
-        fallback_tags = list(QUESTION_TYPE_FALLBACK_TOPIC_TAGS.get(question_type or "", ()))
         if controlled_tags or free_keywords:
             values["topic_tags"] = _dedupe_preserving_order(
                 [tag.value if isinstance(tag, TopicTag) else str(tag) for tag in controlled_tags]
                 + [str(keyword) for keyword in free_keywords]
-                + fallback_tags
             )
         elif "topic_tags" not in values:
-            values["topic_tags"] = fallback_tags
+            values["topic_tags"] = []
 
         if values.get("tag_source") in (None, ""):
             if controlled_tags:
                 values["tag_source"] = "matched"
-            elif free_keywords or fallback_tags:
+            elif free_keywords:
                 values["tag_source"] = "fallback"
             else:
                 values["tag_source"] = "empty"
@@ -468,7 +351,6 @@ class AnswerDraft(BaseModel):
     impacts: list[str] = Field(default_factory=list)
     risks: list[str] = Field(default_factory=list)
     sources: list[SourceCitation] = Field(default_factory=list)
-    forecast: ForecastBlock | None = None
 
 
 class ValidationResult(BaseModel):
@@ -497,7 +379,6 @@ class QueryResponse(BaseModel):
     confidence_score: float = Field(alias="confidenceScore")
     sources: list[SourceCitation]
     disclaimer: str
-    forecast: ForecastBlock | None = None
     # P3 UI parity：把回查 QueryLogDetail 才看得到的 meta 補進即時回應，
     # 讓前端不必二次查詢 /query-log/{id} 就能顯示 warnings / 分類來源 / digest 標籤。
     warnings: list[str] = Field(default_factory=list)

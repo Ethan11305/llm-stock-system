@@ -399,7 +399,6 @@ class PostgresQueryLogStore(QueryLogStore):
             confidence_score=float(log_row["confidence_score"] or 0.0),
             sources=[self._row_to_source_citation(row) for row in source_rows],
             disclaimer="本系統僅整理公開資訊，不構成投資建議。",
-            forecast=None,
         )
 
 
