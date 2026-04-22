@@ -18,6 +18,7 @@ from llm_stock_system.adapters.postgres_query_log_store import PostgresQueryLogS
 from llm_stock_system.adapters.repositories import InMemoryDocumentRepository, InMemoryQueryLogStore
 from llm_stock_system.adapters.twse_financial import TwseCompanyFinancialClient
 from llm_stock_system.core.config import get_settings
+from llm_stock_system.layers.augmentation_layer import AugmentationLayer
 from llm_stock_system.layers.data_governance_layer import DataGovernanceLayer
 from llm_stock_system.layers.digest_input_layer import DigestInputLayer
 from llm_stock_system.layers.generation_layer import GenerationLayer
@@ -164,6 +165,9 @@ def create_app() -> FastAPI:
         query_log_store = InMemoryQueryLogStore()
     app.state.query_log_store = query_log_store
 
+    # AugmentationLayer：兩條 pipeline 共用同一個實例（無狀態，線程安全）
+    augmentation_layer = AugmentationLayer()
+
     pipeline = QueryPipeline(
         input_layer=InputLayer(stock_resolver=stock_resolver),
         retrieval_layer=retrieval_layer,
@@ -184,6 +188,7 @@ def create_app() -> FastAPI:
         presentation_layer=PresentationLayer(),
         query_log_store=query_log_store,
         query_hydrator=query_hydrator,
+        augmentation_layer=augmentation_layer,
     )
 
     app.state.pipeline = pipeline
@@ -227,6 +232,7 @@ def create_app() -> FastAPI:
             presentation_layer=PresentationLayer(),
             query_log_store=query_log_store,
             query_hydrator=query_hydrator,
+            augmentation_layer=augmentation_layer,
         )
         app.state.digest_classifier_enabled = digest_classifier is not None
 

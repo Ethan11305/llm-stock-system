@@ -1,7 +1,10 @@
+from __future__ import annotations
+
 import logging
 
 from llm_stock_system.core.interfaces import QueryHydrator, QueryLogStore
 from llm_stock_system.core.models import HydrationResult, QueryRequest, QueryResponse, SourceResponse
+from llm_stock_system.layers.augmentation_layer import AugmentationLayer
 from llm_stock_system.layers.data_governance_layer import DataGovernanceLayer
 from llm_stock_system.layers.generation_layer import GenerationLayer
 from llm_stock_system.layers.input_layer import InputLayer
@@ -23,6 +26,7 @@ class QueryPipeline:
         presentation_layer: PresentationLayer,
         query_log_store: QueryLogStore,
         query_hydrator: QueryHydrator | None = None,
+        augmentation_layer: AugmentationLayer | None = None,
     ) -> None:
         self._input_layer = input_layer
         self._retrieval_layer = retrieval_layer
@@ -32,6 +36,7 @@ class QueryPipeline:
         self._presentation_layer = presentation_layer
         self._query_log_store = query_log_store
         self._query_hydrator = query_hydrator
+        self._augmentation_layer = augmentation_layer
 
     def handle_query(self, request: QueryRequest) -> QueryResponse:
         structured_query = self._input_layer.parse(request)
@@ -53,13 +58,34 @@ class QueryPipeline:
                 )
         retrieved_documents = self._retrieval_layer.retrieve(structured_query)
         governance_report = self._data_governance_layer.curate(structured_query, retrieved_documents)
-        answer_draft = self._generation_layer.generate(structured_query, governance_report)
+
+        # Augmentation（A）：在 governance 結束後、generation 開始前，
+        # 把 evidence 重組成 intent-aware 的豐富化上下文
+        augmented_context = None
+        if self._augmentation_layer is not None:
+            try:
+                augmented_context = self._augmentation_layer.augment(
+                    structured_query, governance_report
+                )
+            except Exception as exc:
+                logger.warning(
+                    "QueryPipeline: augmentation 失敗（ticker=%s, intent=%s）：%s",
+                    getattr(structured_query, "ticker", None),
+                    getattr(structured_query, "intent", None),
+                    exc,
+                    exc_info=True,
+                )
+
+        answer_draft = self._generation_layer.generate(
+            structured_query, governance_report, augmented_context
+        )
         validation_result = self._validation_layer.validate(
             structured_query,
             governance_report,
             answer_draft,
             hydration_result.facet_miss_list,
             hydration_result.preferred_miss_list,
+            hydration_warnings=hydration_result.warnings,
         )
         response = self._presentation_layer.present(
             structured_query,

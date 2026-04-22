@@ -39,9 +39,11 @@ class ValidationLayer:
         answer_draft: AnswerDraft,
         facet_miss_list: list[str] | None = None,
         preferred_miss_list: list[str] | None = None,
+        hydration_warnings: list[str] | None = None,
     ) -> ValidationResult:
         confidence_score = self._calculate_base_confidence(governance_report, answer_draft)
-        warnings: list[str] = []
+        # hydration_warnings 優先放入（例如 FinMind rate limit），確保使用者最先看到
+        warnings: list[str] = list(hydration_warnings or [])
 
         confidence_score = self._apply_general_checks(
             query,

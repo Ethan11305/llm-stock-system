@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field as dataclass_field
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .enums import (
     ConfidenceLight,
@@ -116,16 +116,6 @@ class QueryRequest(BaseModel):
 
 
 class StructuredQuery(BaseModel):
-    """Normalized representation of a user query after the Input layer.
-
-    Routing contract (Wave 4 final state)
-    -------------------------------------
-    ``intent`` + ``controlled_tags`` are the **single source of truth** for
-    every downstream layer (PolicyRegistry, retrieval profile, synthesis
-    strategy, validation profile). The legacy ``question_type`` string and
-    all helpers around it have been removed in Stage 6b.
-    """
-
     user_query: str
     ticker: str | None = None
     company_name: str | None = None
@@ -143,7 +133,7 @@ class StructuredQuery(BaseModel):
     topic_tags: list[str] = Field(default_factory=list)
     tag_source: str = "empty"
     stance_bias: StanceBias = StanceBias.NEUTRAL
-    classifier_source: str = "rule"  # "rule" | "llm" | "mixed"
+    classifier_source: str = "rule"
     query_profile: QueryProfile = QueryProfile.LEGACY
 
     @model_validator(mode="before")
@@ -196,6 +186,7 @@ class HydrationResult:
     facet_miss_list: list[str] = dataclass_field(default_factory=list)
     preferred_miss_list: list[str] = dataclass_field(default_factory=list)
     total_duration_ms: float = 0.0
+    warnings: list[str] = dataclass_field(default_factory=list)
 
 
 class Document(BaseModel):
@@ -211,6 +202,13 @@ class Document(BaseModel):
     author: str | None = None
     topics: list[Topic] = Field(default_factory=list)
     is_valid: bool = True
+
+    @field_validator("published_at", mode="before")
+    @classmethod
+    def _normalize_published_at(cls, v: object) -> object:
+        if isinstance(v, datetime) and v.tzinfo is None:
+            return v.replace(tzinfo=timezone.utc)
+        return v
 
 
 class StockInfo(BaseModel):
@@ -312,16 +310,33 @@ class MarginPurchaseShortSale(BaseModel):
     note: str | None = None
 
 
+class AugmentedContext(BaseModel):
+    """Enriched context produced by AugmentationLayer for downstream generation."""
+    intent_frame: str = ""
+    structured_block: str = ""
+    narrative_texts: list[str] = Field(default_factory=list)
+    data_gaps: list[str] = Field(default_factory=list)
+
+
 class Evidence(BaseModel):
     document_id: str
     title: str
     excerpt: str
+    full_content: str = ""
     source_name: str
     source_tier: SourceTier
     url: str
     published_at: datetime
     support_score: float
     corroboration_count: int = 1
+    source_type: str = ""
+
+    @field_validator("published_at", mode="before")
+    @classmethod
+    def _normalize_published_at(cls, v: object) -> object:
+        if isinstance(v, datetime) and v.tzinfo is None:
+            return v.replace(tzinfo=timezone.utc)
+        return v
 
 
 class GovernanceReport(BaseModel):
@@ -379,8 +394,6 @@ class QueryResponse(BaseModel):
     confidence_score: float = Field(alias="confidenceScore")
     sources: list[SourceCitation]
     disclaimer: str
-    # P3 UI parity：把回查 QueryLogDetail 才看得到的 meta 補進即時回應，
-    # 讓前端不必二次查詢 /query-log/{id} 就能顯示 warnings / 分類來源 / digest 標籤。
     warnings: list[str] = Field(default_factory=list)
     classifier_source: str = Field(default="rule", alias="classifierSource")
     query_profile: QueryProfile = Field(
@@ -392,14 +405,6 @@ class QueryResponse(BaseModel):
 
 
 class QueryLogDetail(BaseModel):
-    """單一查詢的完整回查資料。
-
-    採用組合式設計：直接嵌入 ``QueryResponse``，避免欄位漂移時兩套 schema 不同步。
-
-    Digest 產品線與 legacy 路徑皆可共用這個模型。``query_profile`` 欄位標示
-    該次查詢是否走 digest 路徑，便於前端或分析工具分流。
-    """
-
     query_id: str = Field(alias="queryId")
     query_profile: QueryProfile = Field(alias="queryProfile")
     classifier_source: str = Field(alias="classifierSource")
@@ -407,7 +412,6 @@ class QueryLogDetail(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     source_count: int = Field(default=0, alias="sourceCount")
     schema_version: int = Field(default=1, alias="schemaVersion")
-
     structured_query: dict = Field(default_factory=dict, alias="structuredQuery")
     response: QueryResponse
 

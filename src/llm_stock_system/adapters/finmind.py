@@ -1,3 +1,4 @@
+import time as _time
 from datetime import date, datetime, time, timedelta, timezone
 
 import httpx
@@ -11,6 +12,18 @@ from llm_stock_system.core.models import (
     PriceBar,
     StockInfo,
 )
+
+
+class FinMindRateLimitError(Exception):
+    """FinMind API 回傳 429，免費方案已觸及 Rate Limit。
+
+    Attributes:
+        user_message: 可直接顯示給使用者的說明文字。
+    """
+
+    def __init__(self, user_message: str) -> None:
+        super().__init__(user_message)
+        self.user_message = user_message
 
 
 class FinMindClient:
@@ -294,22 +307,59 @@ class FinMindClient:
         return rows
 
     def _request_dataset(self, dataset: str, **params) -> list[dict]:
+        """呼叫 FinMind /data，帶指數退避 retry。
+
+        重試條件：
+        - 429 Too Many Requests（免費方案 rate limit）：最多重試 3 次（2s → 4s → 8s）
+        - 5xx Server Error：同上
+        - httpx.TimeoutException：同上
+
+        429 重試耗盡後拋 FinMindRateLimitError（含可顯示給使用者的說明文字）。
+        其他 4xx 直接往上拋，不重試。
+        """
         query = {"dataset": dataset}
         query.update(params)
 
-        with httpx.Client(timeout=30.0) as client:
-            response = client.get(
-                f"{self._base_url}/data",
-                headers=self._headers(),
-                params=query,
-            )
-            response.raise_for_status()
-            payload = response.json()
+        last_exc: Exception | None = None
+        is_rate_limited = False
 
-        data = payload.get("data", [])
-        if not isinstance(data, list):
-            raise ValueError(f"Unexpected FinMind payload for dataset {dataset}")
-        return data
+        for attempt in range(3):
+            try:
+                with httpx.Client(timeout=30.0) as client:
+                    response = client.get(
+                        f"{self._base_url}/data",
+                        headers=self._headers(),
+                        params=query,
+                    )
+                    response.raise_for_status()
+                    payload = response.json()
+                    data = payload.get("data", [])
+                    if not isinstance(data, list):
+                        raise ValueError(f"Unexpected FinMind payload for dataset {dataset}")
+                    return data
+            except httpx.HTTPStatusError as exc:
+                last_exc = exc
+                status = exc.response.status_code
+                if status == 429:
+                    is_rate_limited = True
+                    wait = 2 ** (attempt + 1)  # 2s, 4s, 8s
+                    _time.sleep(wait)
+                elif status >= 500:
+                    wait = 2 ** (attempt + 1)
+                    _time.sleep(wait)
+                else:
+                    raise
+            except httpx.TimeoutException as exc:
+                last_exc = exc
+                _time.sleep(2 ** (attempt + 1))
+
+        if is_rate_limited:
+            raise FinMindRateLimitError(
+                "FinMind API 已觸及免費方案的使用上限（Rate Limit）。"
+                "目前市場資料無法即時補充，回答將以現有本地資料為準。"
+                "若需完整資料，請稍後再試或考慮升級 FinMind 付費方案。"
+            )
+        raise last_exc or RuntimeError(f"FinMind dataset {dataset} 請求失敗（重試 3 次）")
 
     def _headers(self) -> dict[str, str]:
         if not self._api_token:

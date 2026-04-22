@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 import json
+import time
 
 import httpx
 
@@ -7,6 +10,7 @@ from llm_stock_system.core.enums import Intent
 from llm_stock_system.core.interfaces import LLMClient
 from llm_stock_system.core.models import (
     AnswerDraft,
+    AugmentedContext,
     GovernanceReport,
     SourceCitation,
     StructuredQuery,
@@ -69,6 +73,7 @@ class OpenAIResponsesSynthesisClient(LLMClient):
         query: StructuredQuery,
         governance_report: GovernanceReport,
         system_prompt: str,
+        augmented_context: AugmentedContext | None = None,
     ) -> AnswerDraft:
         if not governance_report.evidence:
             if self._preliminary_answers_enabled:
@@ -92,22 +97,27 @@ class OpenAIResponsesSynthesisClient(LLMClient):
             for item in governance_report.evidence
         ]
 
-        evidence_lines = [
-            (
-                f"- title={item.title}; source={item.source_name}; tier={item.source_tier.value}; "
-                f"date={item.published_at:%Y-%m-%d}; excerpt={item.excerpt}"
-            )
-            for item in governance_report.evidence
-        ]
-
-        user_prompt = self._build_grounded_user_prompt(query, evidence_lines)
+        if augmented_context is not None:
+            user_prompt = self._build_augmented_user_prompt(query, augmented_context)
+        else:
+            # 向後相容：無 augmented_context 時使用舊的 evidence lines 格式
+            evidence_lines = [
+                (
+                    f"- title={item.title}; source={item.source_name}; tier={item.source_tier.value}; "
+                    f"date={item.published_at:%Y-%m-%d}; excerpt={item.excerpt}"
+                )
+                for item in governance_report.evidence
+            ]
+            user_prompt = self._build_grounded_user_prompt(query, evidence_lines)
 
         try:
             response_json = self._request(self._build_payload(system_prompt, user_prompt))
             text_output = self._extract_text(response_json)
             parsed = self._parse_json_block(text_output)
         except (httpx.HTTPError, ValueError, json.JSONDecodeError):
-            return self._fallback_client.synthesize(query, governance_report, system_prompt)
+            return self._fallback_client.synthesize(
+                query, governance_report, system_prompt, augmented_context
+            )
 
         summary = self._coerce_string(parsed.get("summary"), "資料不足，無法確認。")
         highlights = self._coerce_list(parsed.get("highlights"))
@@ -173,6 +183,64 @@ class OpenAIResponsesSynthesisClient(LLMClient):
     # ------------------------------------------------------------------ #
     # Prompt builders                                                      #
     # ------------------------------------------------------------------ #
+
+    def _build_augmented_user_prompt(
+        self,
+        query: StructuredQuery,
+        ctx: AugmentedContext,
+    ) -> str:
+        """使用 AugmentedContext 建構豐富化的 user prompt。
+
+        結構：
+          1. 查詢基本資訊（ticker / intent / tags）
+          2. 分析重點（intent_frame）
+          3. 結構化數據（structured_block）—— 已整合的數字表格
+          4. 相關新聞與公告（narrative_texts）—— 保留語意推理空間
+          5. 資料缺口（data_gaps）—— 明確告知 LLM 缺什麼，避免幻覺補全
+          6. 輸出格式要求
+        """
+        parts = list(self._build_query_context_lines(query))
+        parts.append("")
+
+        # 分析重點
+        if ctx.intent_frame:
+            parts.append("分析重點：")
+            parts.append(ctx.intent_frame)
+            parts.append("")
+
+        # 結構化數據
+        if ctx.structured_block:
+            parts.append("【結構化數據】")
+            parts.append(ctx.structured_block)
+            parts.append("")
+
+        # 新聞與公告
+        if ctx.narrative_texts:
+            parts.append("【相關新聞與公告】")
+            for text in ctx.narrative_texts:
+                parts.append(text)
+                parts.append("")
+
+        # 資料缺口
+        if ctx.data_gaps:
+            parts.append("【資料缺口（以下數字請勿自行補全）】")
+            for gap in ctx.data_gaps:
+                parts.append(f"- {gap}")
+            parts.append("")
+
+        parts.extend([
+            "Return exactly one JSON object with these keys:",
+            "summary, highlights, facts, impacts, risks",
+            "Rules:",
+            "- Use only the data and evidence provided above.",
+            "- For each claim in summary/facts, the supporting data must appear in the structured block or news above.",
+            "- If a data gap is listed, do NOT fabricate the missing number; say '資料不足，無法確認'.",
+            "- Respond in Traditional Chinese.",
+            "- Use Traditional Chinese characters only; avoid Simplified Chinese wording.",
+            "- highlights, facts, impacts, risks must be arrays of short strings.",
+            "- Do not include markdown fences.",
+        ])
+        return "\n".join(parts)
 
     def _build_grounded_user_prompt(self, query: StructuredQuery, evidence_lines: list[str]) -> str:
         return "\n".join(
@@ -258,6 +326,98 @@ class OpenAIResponsesSynthesisClient(LLMClient):
             ],
             sources=[],
         )
+
+    # ------------------------------------------------------------------ #
+    # HTTP / payload helpers                                               #
+    # ------------------------------------------------------------------ #
+
+    def _build_payload(self, system_prompt: str, user_prompt: str) -> dict:
+        return {
+            "model": self._model_name,
+            "input": [
+                {"role": "system", "content": [{"type": "input_text", "text": system_prompt}]},
+                {"role": "user", "content": [{"type": "input_text", "text": user_prompt}]},
+            ],
+        }
+
+    def _request(self, payload: dict) -> dict:
+        """呼叫 OpenAI Responses API，帶指數退避 retry。
+
+        重試條件：
+        - 429 Too Many Requests（rate limit）
+        - 5xx Server Error
+        - httpx.TimeoutException
+
+        最多重試 3 次（wait: 2s → 4s → 8s）。其他 4xx 直接拋出，不重試。
+        """
+        last_exc: Exception | None = None
+        for attempt in range(3):
+            try:
+                with httpx.Client(timeout=30.0) as client:
+                    response = client.post(
+                        f"{self._base_url}/responses",
+                        headers={
+                            "Authorization": f"Bearer {self._api_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json=payload,
+                    )
+                    response.raise_for_status()
+                    return response.json()
+            except httpx.HTTPStatusError as exc:
+                last_exc = exc
+                status = exc.response.status_code
+                if status == 429 or status >= 500:
+                    wait = 2 ** (attempt + 1)  # 2s, 4s, 8s
+                    time.sleep(wait)
+                else:
+                    # 4xx（非 429）：不重試，直接往上拋
+                    raise
+            except httpx.TimeoutException as exc:
+                last_exc = exc
+                wait = 2 ** (attempt + 1)
+                time.sleep(wait)
+
+        raise last_exc or RuntimeError("OpenAI API 重試 3 次後仍失敗")
+
+    def _extract_text(self, payload: dict) -> str:
+        collected: list[str] = []
+
+        def walk(node) -> None:
+            if isinstance(node, dict):
+                if isinstance(node.get("text"), str):
+                    collected.append(node["text"])
+                for value in node.values():
+                    walk(value)
+            elif isinstance(node, list):
+                for item in node:
+                    walk(item)
+
+        walk(payload)
+        return "\n".join(part for part in collected if part.strip())
+
+    def _parse_json_block(self, text: str) -> dict:
+        stripped = text.strip()
+        if stripped.startswith("{") and stripped.endswith("}"):
+            return json.loads(stripped)
+
+        start = stripped.find("{")
+        end = stripped.rfind("}")
+        if start != -1 and end != -1 and start < end:
+            return json.loads(stripped[start : end + 1])
+        raise ValueError("OpenAI response did not contain a JSON object")
+
+    def _coerce_list(self, value) -> list[str]:
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+        if isinstance(value, str) and value.strip():
+            return [value.strip()]
+        return []
+
+    def _coerce_string(self, value, default: str) -> str:
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        return default
 
     def _build_payload(self, system_prompt: str, user_prompt: str) -> dict:
         return {

@@ -4,10 +4,15 @@ from llm_stock_system.core.enums import SourceTier, StanceBias
 from llm_stock_system.core.models import GovernanceReport, StructuredQuery
 
 
+def _haystack(evidence) -> str:
+    """回傳最長可用文字：優先 full_content（1200 字），不存在時 fallback 至 excerpt（220 字）。"""
+    return evidence.full_content if evidence.full_content else evidence.excerpt
+
+
 def extract_number(report: GovernanceReport, pattern: str) -> str | None:
     compiled = re.compile(pattern)
     for evidence in report.evidence:
-        match = compiled.search(evidence.excerpt)
+        match = compiled.search(_haystack(evidence))
         if match:
             return match.group(1)
     return None
@@ -16,7 +21,7 @@ def extract_number(report: GovernanceReport, pattern: str) -> str | None:
 def extract_text(report: GovernanceReport, pattern: str) -> str | None:
     compiled = re.compile(pattern)
     for evidence in report.evidence:
-        match = compiled.search(evidence.excerpt)
+        match = compiled.search(_haystack(evidence))
         if match:
             return match.group(1)
     return None
@@ -26,8 +31,9 @@ def extract_price_range(report: GovernanceReport) -> tuple[str | None, str | Non
     high_pattern = re.compile(r"最高價(?:為)?\s*(\d+(?:\.\d+)?)\s*元")
     low_pattern = re.compile(r"最低價(?:為)?\s*(\d+(?:\.\d+)?)\s*元")
     for evidence in report.evidence:
-        high_match = high_pattern.search(evidence.excerpt)
-        low_match = low_pattern.search(evidence.excerpt)
+        text = _haystack(evidence)
+        high_match = high_pattern.search(text)
+        low_match = low_pattern.search(text)
         if high_match and low_match:
             return high_match.group(1), low_match.group(1)
     return None, None
@@ -35,7 +41,7 @@ def extract_price_range(report: GovernanceReport) -> tuple[str | None, str | Non
 
 def evidence_contains(report: GovernanceReport, keywords: tuple[str, ...]) -> bool:
     for evidence in report.evidence:
-        haystack = f"{evidence.title} {evidence.excerpt}".lower()
+        haystack = f"{evidence.title} {_haystack(evidence)}".lower()
         if any(keyword.lower() in haystack for keyword in keywords):
             return True
     return False

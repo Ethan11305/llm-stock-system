@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Protocol
 
 from llm_stock_system.core.models import (
     AnswerDraft,
+    AugmentedContext,
     Document,
     GovernanceReport,
     HydrationResult,
@@ -63,6 +64,7 @@ class LLMClient(Protocol):
         query: StructuredQuery,
         governance_report: GovernanceReport,
         system_prompt: str,
+        augmented_context: AugmentedContext | None = None,
     ) -> AnswerDraft:
         ...
 

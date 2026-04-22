@@ -33,8 +33,10 @@ class DataGovernanceLayer:
                 document_id=document.id,
                 title=document.title,
                 excerpt=self._build_excerpt(document.content),
+                full_content=self._build_full_content(document.content),
                 source_name=document.source_name,
                 source_tier=document.source_tier,
+                source_type=document.source_type,
                 url=document.url,
                 published_at=document.published_at,
                 support_score=self._support_score(document),
@@ -69,6 +71,10 @@ class DataGovernanceLayer:
         trimmed = " ".join(content.split())
         return trimmed if len(trimmed) <= limit else f"{trimmed[:limit].rstrip()}..."
 
+    def _build_full_content(self, content: str, limit: int = 1200) -> str:
+        trimmed = " ".join(content.split())
+        return trimmed if len(trimmed) <= limit else f"{trimmed[:limit].rstrip()}..."
+
     def _support_score(self, document: Document) -> float:
         tier_weight = {
             SourceTier.HIGH: 1.0,
@@ -78,10 +84,6 @@ class DataGovernanceLayer:
         return round(tier_weight, 2)
 
     def _consistency_status(self, evidence: list[Evidence]) -> ConsistencyStatus:
-        # Use source diversity as the consistency proxy:
-        # counting unique source names is more meaningful than raw document count,
-        # because two documents from different publishers genuinely corroborate each other,
-        # whereas many documents from the same publisher are just repetition.
         unique_sources = len({e.source_name for e in evidence})
         if unique_sources >= 3:
             return ConsistencyStatus.CONSISTENT
@@ -94,8 +96,9 @@ class DataGovernanceLayer:
             return FreshnessStatus.OUTDATED
 
         now = datetime.now(timezone.utc)
+        # published_at is always UTC-aware (normalised by Document field_validator)
         latest = max(document.published_at for document in documents)
-        age_days = (now - latest.astimezone(timezone.utc)).days
+        age_days = (now - latest).days
 
         if age_days <= 7:
             return FreshnessStatus.RECENT

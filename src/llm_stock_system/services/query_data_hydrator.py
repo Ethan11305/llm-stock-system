@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 
 from llm_stock_system.core.enums import DataFacet, Intent, QueryProfile
 from llm_stock_system.core.models import HydrationResult, StructuredQuery, ValidationResult
+from llm_stock_system.adapters.finmind import FinMindRateLimitError
 
 if TYPE_CHECKING:
     from llm_stock_system.core.interfaces import DocumentRepository
@@ -187,6 +188,7 @@ class QueryDataHydrator:
                     )
 
         # 聚合結果（邏輯與原串行版本相同）
+        _rate_limit_warned = False  # 同一次 hydration 只寫一次 rate limit 警示
         for facet_result in facet_results:
             if facet_result.success:
                 result.synced_facets.add(facet_result.facet)
@@ -198,6 +200,16 @@ class QueryDataHydrator:
                 result.facet_miss_list.append(facet.value)
             elif facet in preferred_facets and facet.value not in result.preferred_miss_list:
                 result.preferred_miss_list.append(facet.value)
+
+            # FinMind rate limit：將使用者可讀警示寫入 warnings（去重，每次 hydration 只寫一次）
+            if not _rate_limit_warned and isinstance(facet_result.exception, FinMindRateLimitError):
+                result.warnings.append(facet_result.exception.user_message)
+                _rate_limit_warned = True
+                logger.warning(
+                    "hydrate: FinMind rate limit（ticker=%s, facet=%s）",
+                    query.ticker,
+                    facet.value,
+                )
 
         result.total_duration_ms = (time.perf_counter() - started_at) * 1000
         logger.debug(
@@ -466,7 +478,7 @@ class QueryDataHydrator:
         financial_start = date(today.year - 5, 1, 1)
         price_start = today - timedelta(days=730)
         margin_start = today - timedelta(days=365)
-        news_start = today - timedelta(days=365)
+        news_start = today - timedelta(days=730)  # 2 年
 
         try:
             self._safe_call(getattr(self._gateway, "sync_stock_info", None))

@@ -231,9 +231,13 @@ class QueryPipelineTestCase(unittest.TestCase):
 
         draft = RuleBasedSynthesisClient().synthesize(query, governance_report, "")
 
+        # Wave 4：新實作以 evidence_contains + extract_text 動態偵測可用訊號，
+        # 不再要求 10 個 regex 全命中。MACD 趨勢與布林位置仍由 extract_text 擷取。
         self.assertIn("MACD 動能偏多", draft.summary)
         self.assertIn("接近布林上軌", draft.summary)
-        self.assertIn("MA5 乖離率約 3.25%", draft.summary)
+        self.assertIn("已進入超買區", draft.summary)
+        # 確認已列出偵測到的指標種類
+        self.assertIn("技術指標", draft.summary)
 
     def test_rule_based_summary_mentions_theme_impact(self) -> None:
         query = InputLayer().parse(
@@ -313,9 +317,11 @@ class QueryPipelineTestCase(unittest.TestCase):
 
         draft = RuleBasedSynthesisClient().synthesize(query, governance_report, "")
 
+        # Wave 4：移除硬編碼年份（原 2026）的 legacy summarizer 後，
+        # 改由 evidence_contains 動態偵測 AI 伺服器 + 成長動能 + 占比揭露三個條件。
         self.assertIn("AI 伺服器", draft.summary)
-        self.assertIn("2026 年的重要成長動能", draft.summary)
-        self.assertIn("未一致揭露明確營收占比", draft.summary)
+        self.assertIn("重要成長動能", draft.summary)
+        self.assertIn("揭露相關營收占比", draft.summary)
 
 
 if __name__ == "__main__":
