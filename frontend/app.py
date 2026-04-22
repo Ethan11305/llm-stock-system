@@ -666,12 +666,24 @@ with col_main:
         r = st.session_state.result
 
         # Parse fields (handle both camelCase and snake_case)
-        light       = _g(r, "confidenceLight", "confidence_light", default="yellow")
-        score       = _g(r, "confidenceScore",  "confidence_score",  default=0.0)
+        # confidenceLight：優先讀 API 原生欄位，否則由 status 推導
+        _status = r.get("status", "success")
+        _status_to_light = {"success": "green", "partial": "yellow", "rejected": "red"}
+        light   = _g(r, "confidenceLight", "confidence_light",
+                     default=_status_to_light.get(_status, "yellow"))
+        # confidenceScore：優先讀 0–1 浮點欄位，否則由 trust_score（0–100）換算
+        _raw_score = _g(r, "confidenceScore", "confidence_score", default=None)
+        if _raw_score is None:
+            _trust = r.get("trust_score", 0) or 0
+            score = _trust / 100.0
+        else:
+            score = float(_raw_score)
+
         summary     = r.get("summary", "")
         highlights  = r.get("highlights", [])
         facts       = r.get("facts", [])
-        impacts     = r.get("impacts", [])
+        # impacts：優先讀 impacts，沒有時 fallback 到 evidence
+        impacts     = r.get("impacts") or r.get("evidence", [])
         risks       = r.get("risks", [])
         warnings    = r.get("warnings", [])
         disclaimer  = r.get("disclaimer", "")
@@ -726,17 +738,81 @@ with col_main:
                     _sec("✨", "重要重點") + items_html, pad="12px 14px"
                 ), unsafe_allow_html=True)
 
+            # ── 取文字的輔助函式 ──────────────────────────────────────
+            def _fact_text(item) -> str:
+                """從 Fact dict 或純字串取出顯示文字，附上來源標記。"""
+                if isinstance(item, dict):
+                    txt = item.get("text", "")
+                    src = item.get("source", "")
+                    conf = item.get("confidence")
+                    suffix = ""
+                    if src:
+                        suffix += f'<span style="font-size:10px;color:{DIM};margin-left:8px">— {src}</span>'
+                    if conf is not None:
+                        bar_w = int(conf)
+                        suffix += (
+                            f'<span style="display:inline-flex;align-items:center;gap:3px;'
+                            f'margin-left:8px;vertical-align:middle">'
+                            f'<span style="width:28px;height:3px;background:{BORDER};border-radius:2px;overflow:hidden;display:inline-block">'
+                            f'<span style="width:{bar_w}%;height:100%;background:{GREEN};display:block"></span></span>'
+                            f'<span style="font-size:10px;color:{DIM}">{bar_w}%</span></span>'
+                        )
+                    return txt + suffix
+                return str(item)
+
+            def _evidence_text(item) -> str:
+                """從 Evidence dict 或純字串取出顯示文字。"""
+                if isinstance(item, dict):
+                    title   = item.get("title", "")
+                    content = item.get("content", "")
+                    tags    = item.get("tags", [])
+                    tag_html = "".join(
+                        f'<span style="font-size:9px;color:{ACCENT};background:{ACCENT}15;'
+                        f'border-radius:3px;padding:1px 5px;margin-right:3px">{t}</span>'
+                        for t in tags
+                    ) if tags else ""
+                    return (
+                        f'<span style="font-weight:600;color:{TEXT}">{title}</span>'
+                        + (f'<br><span style="font-size:12px;color:{SUB};line-height:1.7">{content}</span>' if content else "")
+                        + (f'<br><span style="margin-top:4px;display:inline-block">{tag_html}</span>' if tag_html else "")
+                    )
+                return str(item)
+
+            def _risk_text(item) -> str:
+                """從 Risk dict 取出文字並加上風險等級標籤。"""
+                if isinstance(item, dict):
+                    level = item.get("level", "")
+                    txt   = item.get("text", "")
+                    src   = item.get("source", "")
+                    _level_map = {"high": (RED, "高"), "medium": (YELLOW, "中"), "low": (GREEN, "低")}
+                    lc, ln = _level_map.get(level, (YELLOW, ""))
+                    badge = (
+                        f'<span style="font-size:10px;font-weight:700;color:{lc};'
+                        f'background:{lc}18;border-radius:3px;padding:1px 6px;margin-right:6px">{ln}風險</span>'
+                    ) if ln else ""
+                    suffix = (
+                        f'<span style="font-size:10px;color:{DIM};margin-left:8px">— {src}</span>'
+                    ) if src else ""
+                    return badge + txt + suffix
+                return str(item)
+
+            def _risk_dot(item) -> str:
+                """根據風險等級決定點的顏色。"""
+                if isinstance(item, dict):
+                    return {"high": RED, "medium": YELLOW, "low": GREEN}.get(item.get("level", ""), YELLOW)
+                return YELLOW
+
             # Facts / Impacts / Risks — tabs
             tab_f, tab_i, tab_r = st.tabs([
                 f"✅ 已核實事實 ({len(facts)})",
-                f"💡 可能影響 ({len(impacts)})",
+                f"💡 證據摘錄 ({len(impacts)})",
                 f"⚠️ 風險提示 ({len(risks)})",
             ])
 
             with tab_f:
                 if facts:
                     st.markdown(
-                        "".join(_row_item(GREEN, item) for item in facts),
+                        "".join(_row_item(GREEN, _fact_text(item)) for item in facts),
                         unsafe_allow_html=True,
                     )
                 else:
@@ -748,19 +824,19 @@ with col_main:
             with tab_i:
                 if impacts:
                     st.markdown(
-                        "".join(_row_item(BLUE, item) for item in impacts),
+                        "".join(_row_item(BLUE, _evidence_text(item)) for item in impacts),
                         unsafe_allow_html=True,
                     )
                 else:
                     st.markdown(
-                        f'<div style="font-size:12px;color:{DIM};padding:10px 0">暫無影響資料</div>',
+                        f'<div style="font-size:12px;color:{DIM};padding:10px 0">暫無證據資料</div>',
                         unsafe_allow_html=True,
                     )
 
             with tab_r:
                 if risks:
                     st.markdown(
-                        "".join(_row_item(YELLOW, item) for item in risks),
+                        "".join(_row_item(_risk_dot(item), _risk_text(item)) for item in risks),
                         unsafe_allow_html=True,
                     )
                 else:
