@@ -176,9 +176,6 @@ pytest -k digest                 # 按 keyword 篩選
 # 完整資料集（股價+財報+股利+新聞）
 .\scripts\sync_finmind.ps1 -Ticker 2603 -Days 400 -Fundamentals -Dividend -News
 
-# 月營收 + 估值
-.\scripts\sync_finmind.ps1 -Ticker 2330 -MonthlyRevenue -Valuation
-
 # 融資融券
 .\scripts\sync_finmind.ps1 -Ticker 2330 -Days 30 -Margin
 
