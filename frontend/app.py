@@ -136,16 +136,16 @@ st.markdown(f"""
   /* ── Primary button (查詢) ── */
   .stButton > button[kind="primary"],
   .stButton > button:not([kind="secondary"]) {{
-    background: {ACCENT} !important;
-    color: #ffffff !important;
-    text-shadow: 0 1px 2px rgba(0,0,0,0.4) !important;
-    border: none !important;
+    background: #e8e3ff !important;
+    color: #2d1fa8 !important;
+    text-shadow: none !important;
+    border: 1.5px solid #c4b8ff !important;
     font-weight: 800 !important;
     border-radius: 7px !important;
     font-size: 13px !important;
     padding: 5px 18px !important;
   }}
-  .stButton > button[kind="primary"]:hover {{ opacity: 0.85 !important; }}
+  .stButton > button[kind="primary"]:hover {{ background: #ddd5ff !important; border-color: #a898f0 !important; }}
 
   /* ── Secondary buttons (history items) ── */
   .stButton > button[kind="secondary"] {{
