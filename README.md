@@ -95,6 +95,14 @@ PolicyRegistry 與所有下游 layer 的 primary key 是 `(Intent, frozenset[Top
 - FinMind API token（需要真實資料時）
 - OpenAI API key（需要 LLM generation 時）
 
+**部署平台**
+
+| 層次 | 平台 | 設定檔 |
+|------|------|--------|
+| 前端 | Streamlit Cloud | `frontend/app.py`；在 App Settings > Secrets 填入 `BACKEND_URL` |
+| 後端（生產） | Vercel | `vercel.json` + `api/index.py` |
+| 後端（本機） | uvicorn | `啟動後端.bat` 或 `railway.json`（Railway 備用） |
+
 ### Quickstart：Local Python + Docker PostgreSQL
 
 開發情境最順的組合。
@@ -244,24 +252,82 @@ FALLBACK_TO_SAMPLE_DATA=true
 
 ```text
 .
-├── db/sql/                       # PostgreSQL init scripts
-├── docs/                         # 架構 / phase / migration / P0 status 文件
+├── api/
+│   └── index.py              # Vercel Serverless Function 入口（生產後端）
+├── db/sql/                       # PostgreSQL 初始化腳本（001–005）
+├── docs/                         # 架構、migration、phase 重構紀錄
 │   ├── architecture.md
+│   ├── responsibility-distribution.md
 │   ├── P0_IMPLEMENTATION_STATUS.md
 │   ├── SCHEMA_MIGRATION_GUIDE.md
-│   └── ...
-├── scripts/                      # PowerShell helpers
-├── src/llm_stock_system/
-│   ├── api/                      # FastAPI app + routes
+│   ├── validation-profile-design-decisions.md
+│   └── ...（phase2–4 重構紀錄、drawio 架構圖）
+├── frontend/                     # Streamlit 前端
+│   ├── app.py                    # UI 主體，透過 HTTP 呼叫後端 API
+│   └── requirements.txt
+├── scripts/                      # 資料同步與查詢 PowerShell helpers
+│   ├── sync_finmind.ps1
+│   ├── query.ps1
+│   ├── get_sources.ps1
+│   ├── backfill_embeddings.py
+│   └── seed_documents.py
+├── src/llm_stock_system/         # 主套件（pip install -e . 安裝）
+│   ├── api/                      # FastAPI app 與 routes
+│   │   ├── app.py
+│   │   └── routes.py
 │   ├── adapters/                 # 外部服務與持久化 adapter
-│   ├── core/                     # enums、models、query_policy、interfaces
+│   │   ├── augmentation/         # 各 Intent 的 augmentation 策略
+│   │   ├── synthesis/            # 各 Intent 的 synthesis 策略
+│   │   ├── finmind.py            # FinMind API client
+│   │   ├── twse_financial.py     # TWSE openapi client（月營收、PE/PB）
+│   │   ├── news_pipeline.py      # 多來源新聞 pipeline
+│   │   ├── openai_classifier.py  # LLM-first query 分類器
+│   │   ├── openai_responses.py   # OpenAI Responses API
+│   │   ├── postgres_market_data.py  # 市場資料 gateway（sync + query）
+│   │   ├── postgres_query_log_store.py
+│   │   ├── repositories.py
+│   │   └── vector_retrieval.py
+│   ├── core/                     # 共用 domain 物件
+│   │   ├── config.py             # Settings（pydantic-settings）
+│   │   ├── enums.py              # Intent、DataFacet、TopicTag 等
+│   │   ├── interfaces.py
+│   │   ├── models.py             # StructuredQuery、QueryResponse、FacetSpec…
+│   │   ├── query_policy.py       # PolicyRegistry（27 支 policy）
+│   │   └── validation_profiles.py
+│   ├── digest/                   # Digest 產品線專屬邏輯
+│   │   └── policy/               # Refusal boundary、closed_tables、terms
 │   ├── layers/                   # 六層 pipeline 實作
-│   ├── orchestrator/             # pipeline 組裝
-│   └── workers/                  # 資料同步 worker 入口
-├── tests/                        # pytest 測試（219 tests）
-├── PRODUCT_SPEC.md               # 產品規格書
-├── digest_refusal_boundary_v1_1.md   # Refusal Boundary 規格
+│   │   ├── input_layer.py
+│   │   ├── digest_input_layer.py
+│   │   ├── retrieval_layer.py
+│   │   ├── data_governance_layer.py
+│   │   ├── augmentation_layer.py
+│   │   ├── generation_layer.py
+│   │   ├── validation_layer.py
+│   │   └── presentation_layer.py
+│   ├── orchestrator/
+│   │   └── pipeline.py           # 六層組裝與 hydration 觸發
+│   ├── services/
+│   │   ├── query_data_hydrator.py  # 並行 facet sync（ThreadPoolExecutor）
+│   │   ├── document_chunker.py
+│   │   └── embedding_service.py
+│   ├── workers/
+│   │   ├── sync_market_data.py   # CLI sync 工具（--fundamentals、--news…）
+│   │   └── ingestion_worker.py
+│   ├── prompts/                  # system_prompt.md
+│   └── sample_data/              # Fallback 用內建範例資料
+├── tests/                        # pytest 測試（219 passed）
+│   ├── digest/
+│   └── test_*.py
+├── .env.example
+├── digest_refusal_boundary_v1_1.md  # Refusal boundary 規格 v1.1
 ├── docker-compose.yml
+├── nixpacks.toml                 # Railway 部署（Nixpacks builder）
+├── Procfile                      # Railway 部署（start command）
 ├── pyproject.toml
-└── README.md
+├── pytest.ini
+├── railway.json                  # Railway 部署設定
+├── requirements.txt              # 生產依賴（供部署平台讀取）
+├── 啟動後端.bat                  # Windows 一鍵啟動後端（uvicorn）
+└── 啟動前端.bat                  # Windows 一鍵啟動前端（streamlit）
 ```

@@ -1,0 +1,7 @@
+# LLM理財 — Streamlit 前端依賴
+# 安裝：pip install -r frontend/requirements.txt
+
+streamlit>=1.35.0
+requests>=2.32.0
+yfinance>=0.2.40
+plotly>=5.0.0
