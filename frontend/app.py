@@ -24,12 +24,12 @@ except Exception:
     _BACKEND_URL = os.environ.get("BACKEND_URL", "http://localhost:8000")
 _BACKEND_URL = (_BACKEND_URL or "http://localhost:8000").rstrip("/")
 API_BASE = f"{_BACKEND_URL}/api"
-TIMEOUT  = 30  # default; long-range queries use _timeout_for()
+TIMEOUT  = 90  # default; first-time queries need to sync data from FinMind
 
 # Longer time ranges need more time to fetch & process data
 _TIMEOUT_MAP = {
-    "1d": 30, "7d": 30, "30d": 45,
-    "latest_quarter": 60, "1y": 90, "3y": 120, "5y": 150,
+    "1d": 90, "7d": 90, "30d": 120,
+    "latest_quarter": 150, "1y": 180, "3y": 210, "5y": 240,
 }
 
 def _timeout_for(time_val: str) -> int:
