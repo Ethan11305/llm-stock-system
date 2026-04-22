@@ -1,3 +1,5 @@
+from datetime import date, timedelta
+
 from fastapi import APIRouter, HTTPException, Request
 
 from llm_stock_system.core.models import (
@@ -34,6 +36,34 @@ def healthcheck(request: Request) -> dict[str, object]:
 def query_stock(request_body: QueryRequest, request: Request) -> QueryResponse:
     pipeline = request.app.state.pipeline
     return pipeline.handle_query(request_body)
+
+
+@router.get("/price/{ticker}")
+def get_price(ticker: str, days: int = 30, request: Request = None) -> dict:
+    """回傳某支股票近 N 天的 OHLCV 資料，供前端股價圖使用。"""
+    market_gateway = getattr(request.app.state, "market_gateway", None)
+    if market_gateway is None:
+        raise HTTPException(status_code=503, detail="Market gateway not available")
+    try:
+        end_date = date.today()
+        start_date = end_date - timedelta(days=days)
+        bars = market_gateway.get_price_bars(ticker, start_date, end_date)
+        return {
+            "ticker": ticker,
+            "bars": [
+                {
+                    "date": b.trading_date.isoformat(),
+                    "open": float(b.open_price),
+                    "high": float(b.high_price),
+                    "low": float(b.low_price),
+                    "close": float(b.close_price),
+                    "volume": b.trading_volume,
+                }
+                for b in sorted(bars, key=lambda x: x.trading_date)
+            ],
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/digest/query", response_model=QueryResponse)

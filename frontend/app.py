@@ -441,27 +441,32 @@ if do_query and query_input.strip():
 #  STOCK PRICE CHART (spans center + right, above results)
 # ─────────────────────────────────────────────────────────
 @st.cache_data(ttl=300, show_spinner=False)
-def _fetch_price(ticker: str, period: str) -> "tuple[object, str] | tuple[None, None]":
-    """Fetch OHLCV from yfinance; tries .TW then .TWO suffixes."""
+def _fetch_price(ticker: str, days: int) -> "tuple[object, str] | tuple[None, None]":
+    """Fetch OHLCV from Railway backend /api/price/{ticker}."""
+    import pandas as pd
     try:
-        import yfinance as yf
-        for suffix in (".TW", ".TWO"):
-            sym = f"{ticker}{suffix}"
-            hist = yf.Ticker(sym).history(period=period)
-            if not hist.empty:
-                return hist, sym
-        return None, None
+        resp = requests.get(f"{_BACKEND_URL}/api/price/{ticker}?days={days}", timeout=15)
+        if resp.status_code != 200:
+            return None, None
+        data = resp.json().get("bars", [])
+        if not data:
+            return None, None
+        df = pd.DataFrame(data)
+        df["date"] = pd.to_datetime(df["date"])
+        df = df.set_index("date")
+        df.columns = [c.capitalize() for c in df.columns]  # open→Open, etc.
+        return df, ticker
     except Exception:
         return None, None
 
-_PERIOD_MAP = {
-    "1d": "5d",   # yfinance '1d' = only today's intraday; use 5d for a visible line
-    "7d": "7d",
-    "30d": "1mo",
-    "latest_quarter": "3mo",
-    "1y": "1y",
-    "3y": "3y",
-    "5y": "5y",
+_PERIOD_DAYS_MAP = {
+    "1d": 7,
+    "7d": 14,
+    "30d": 40,
+    "latest_quarter": 100,
+    "1y": 370,
+    "3y": 1100,
+    "5y": 1830,
 }
 
 _chart_ticker = (
@@ -472,8 +477,8 @@ if _chart_ticker:
     _, chart_col = st.columns([1.4, 6.4])
     with chart_col:
         _cur_time_val = TIME_OPTIONS.get(time_label, "7d")
-        _period = _PERIOD_MAP.get(_cur_time_val, "1mo")
-        _hist, _sym = _fetch_price(_chart_ticker, _period)
+        _days = _PERIOD_DAYS_MAP.get(_cur_time_val, 40)
+        _hist, _sym = _fetch_price(_chart_ticker, _days)
 
         if _hist is not None:
             import plotly.graph_objects as go
@@ -482,7 +487,7 @@ if _chart_ticker:
             _has_ohlc = all(c in _hist.columns for c in ("Open", "High", "Low", "Close"))
             fig = go.Figure()
 
-            if _has_ohlc and _cur_time_val in ("1d", "7d", "30d", "latest_quarter"):
+            if _has_ohlc and _days <= 100:
                 # Candlestick for shorter ranges
                 fig.add_trace(go.Candlestick(
                     x=_hist.index,
@@ -551,7 +556,7 @@ if _chart_ticker:
                 f'{_close_last:.2f}</span>'
                 f' &nbsp;<span style="color:{_chg_color};font-size:11px">'
                 f'{_chg_sign}{_chg:.2f}%</span>'
-                f'&nbsp;<span style="color:{DIM};font-size:10px">({_period})</span></div>',
+                f'&nbsp;<span style="color:{DIM};font-size:10px">({_days}天)</span></div>',
                 unsafe_allow_html=True,
             )
             st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
