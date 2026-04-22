@@ -11,7 +11,7 @@
 `single_stock_digest` 產品線專注於：「**這檔股票的相關問題，但不往前估值、不做預測**」
 
 - **Scope**：單股、可選擇觀測天數、限於 `NEWS` / `ANNOUNCEMENT` / `COMPOSITE` 三類主題、財報深度分析、技術分析
-- **非目標**：多股比較、估值與目標價、預測漲跌、投資建議
+- **非目標**：多股比較、估值與目標價、預測漲跌、投資建議、財報深度分析(毛利率、營業利益率、EPS、現金流，需要FinMind 付費API的部份)
 - **輸出契約**：摘要 + 事實條列 + 可能影響 + 風險提醒 + 來源清單 + 信任度紅綠燈
 - 完整規格見 [`PRODUCT_SPEC.md`](PRODUCT_SPEC.md)；Refusal Boundary 規格見 [`digest_refusal_boundary_v1_1.md`](digest_refusal_boundary_v1_1.md)
 
@@ -268,7 +268,3 @@ FALLBACK_TO_SAMPLE_DATA=true
 ├── pyproject.toml
 └── README.md
 ```
-
-### 授權
-
-見 [LICENSE](LICENSE)。
