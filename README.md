@@ -38,7 +38,7 @@ Input → Retrieval → Data Governance → Generation → Validation → Presen
 - **Validation Layer**：評估 sufficiency / consistency / freshness，決定紅綠燈
 - **Presentation Layer**：組出面向 API 的 `QueryResponse`
 
-更多細節見 [`docs/architecture.md`](docs/architecture.md)、[`docs/responsibility-distribution.md`](docs/responsibility-distribution.md)。
+架構與責任分工等內部設計文件目前僅保留於本機，不納入 Git 版控。
 
 ### 路由契約（Wave 4 後的最終狀態）
 
@@ -170,7 +170,7 @@ pytest -k digest                 # 按 keyword 篩選
 
 ### DB Schema Migration
 
-完整 schema 變更流程、欄位對照、rollout 順序見 [`docs/SCHEMA_MIGRATION_GUIDE.md`](docs/SCHEMA_MIGRATION_GUIDE.md)。SQL 初始化腳本在 `db/sql/`。
+完整 schema 初始化腳本仍保留在 `db/sql/`；migration 說明文件不納入 repo。
 
 ### 資料同步（PowerShell helper）
 
@@ -255,13 +255,6 @@ FALLBACK_TO_SAMPLE_DATA=true
 ├── api/
 │   └── index.py              # Vercel Serverless Function 入口（生產後端）
 ├── db/sql/                       # PostgreSQL 初始化腳本（001–005）
-├── docs/                         # 架構、migration、phase 重構紀錄
-│   ├── architecture.md
-│   ├── responsibility-distribution.md
-│   ├── P0_IMPLEMENTATION_STATUS.md
-│   ├── SCHEMA_MIGRATION_GUIDE.md
-│   ├── validation-profile-design-decisions.md
-│   └── ...（phase2–4 重構紀錄、drawio 架構圖）
 ├── frontend/                     # Streamlit 前端
 │   ├── app.py                    # UI 主體，透過 HTTP 呼叫後端 API
 │   └── requirements.txt

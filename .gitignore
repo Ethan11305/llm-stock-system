@@ -44,3 +44,7 @@ temp/
 *.docx
 *.xlsx
 *.pptx
+*.pdf
+
+# Local/internal documentation should not be versioned
+docs/
